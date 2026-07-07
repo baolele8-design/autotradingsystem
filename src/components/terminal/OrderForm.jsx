@@ -77,7 +77,11 @@ export default function OrderForm({
                 batchOrders: batch
             };
 
+            // ---------------------------------------------------------
+            // CẦU NỐI LƯỢNG TỬ (Gửi mảng batch đã dọn dẹp)
+            // ---------------------------------------------------------
             const LOCAL_BRIDGE_URL = 'http://localhost:1337/api/execute-batch';
+            
             const res = await fetch(LOCAL_BRIDGE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -86,6 +90,15 @@ export default function OrderForm({
             
             const data = await res.json();
             if (!res.ok) throw new Error(data.details?.msg || data.error || 'Bridge Cục bộ từ chối.');
+
+            // BỘ QUÉT LỖI ẨN CỦA BINANCE (Phát hiện lỗi TP/SL bị rớt)
+            if (Array.isArray(data)) {
+                const errors = data.filter(r => r.error === true || r.code !== undefined);
+                if (errors.length > 0) {
+                    console.error("LỖI CHI TIẾT TỪ BINANCE:", errors);
+                    throw new Error(`Entry đã khớp nhưng sàn TỪ CHỐI ${errors.length} lệnh SL/TP. Vui lòng check ngay trên App Binance!`);
+                }
+            }
 
             setExecStatus('✅ ĐÃ KHỚP CỤM LỆNH LIÊN HOÀN!');
             setTimeout(() => setExecStatus(''), 5000);
