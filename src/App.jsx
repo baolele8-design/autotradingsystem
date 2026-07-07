@@ -17,6 +17,7 @@ import VectorState from './components/terminal/VectorState';
 import OrderForm from './components/terminal/OrderForm';
 import LogicGates from './components/terminal/LogicGates';
 import AiAudit from './components/terminal/AiAudit';
+import TradeJournal from './components/terminal/TradeJournal';
 
 export default function AntiFragileTerminal() {
   // ============================================================================
@@ -43,6 +44,8 @@ export default function AntiFragileTerminal() {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [geminiCooldown, setGeminiCooldown] = useState(0);
+
+  const [isSyncing, setIsSyncing] = useState(false); //(State cho Auto Sync)
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
@@ -448,6 +451,78 @@ Nhiệm vụ kiểm toán của bạn:
     } catch (e) { showToast(`❌ Lỗi Supabase: ${e.message}`); }
   };
 
+  // THÊM TOÀN BỘ HÀM NÀY VÀO DƯỚI HÀM handleSaveTradeLog:
+  const syncBinanceToSupabase = async () => {
+    if (!supabase || !binancePositions) return;
+    setIsSyncing(true);
+    
+    try {
+      // 1. Lấy các lệnh đang OPEN trong DB thuộc Symbol hiện tại
+      const openLogs = tradeLogs.filter(log => log.status === 'OPEN' && log.symbol === symbol);
+      if (openLogs.length === 0) {
+        showToast("✅ Không có lệnh OPEN nào trên DB cần đồng bộ.");
+        setIsSyncing(false);
+        return;
+      }
+
+      // 2. Tìm vị thế thực tế trên Binance cho Symbol này
+      const currentPosition = binancePositions.find(p => p.symbol === symbol);
+      const positionAmt = currentPosition ? parseFloat(currentPosition.positionAmt) : 0;
+
+      for (const log of openLogs) {
+        // Nếu trên sàn không còn vị thế (Position = 0) -> Lệnh đã bị đóng (Cắn SL/TP hoặc chốt tay)
+        if (positionAmt === 0) {
+           // Tính PnL gần đúng tại thời điểm cắn dựa trên giá hiện tại
+           // (Lưu ý: Để chính xác 100% cần gọi API userTrades, nhưng dùng giá hiện tại hoặc SL/TP là giải pháp tinh gọn nhất cho Vercel)
+           const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
+           const priceDiff = parseFloat(autoData.currentPrice) - parseFloat(log.entry);
+           const finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
+           
+           const exitReason = finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS';
+
+           const { error } = await supabase
+             .from('trade_logs')
+             .update({ 
+                status: finalPnl > 0 ? 'WIN' : 'LOSS', 
+                pnl_usd: finalPnl, 
+                close_price: autoData.currentPrice,
+                exit_reason: exitReason,
+                close_time: new Date().toISOString()
+             })
+             .eq('id', log.id);
+             
+           if (!error) {
+              showToast(`🔄 Đã đồng bộ đóng lệnh ${log.symbol} trên Supabase! (PnL: ${finalPnl.toFixed(2)}$)`);
+           }
+        } 
+        // Lệnh vẫn đang chạy, kiểm tra xem có cắn MFE (Max Lãi) hay MAE (Max Âm) chưa để cập nhật cho AI học
+        else if (positionAmt !== 0) {
+           const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
+           const currentPriceDiff = parseFloat(autoData.currentPrice) - parseFloat(log.entry);
+           const livePnl = log.direction === 'LONG' ? currentPriceDiff * sizeCoin : -currentPriceDiff * sizeCoin;
+           
+           let newMfe = log.max_favorable_excursion_usd || 0;
+           let newMae = log.max_adverse_excursion_usd || 0;
+           let requiresUpdate = false;
+
+           if (livePnl > newMfe) { newMfe = livePnl; requiresUpdate = true; }
+           if (livePnl < newMae) { newMae = livePnl; requiresUpdate = true; }
+
+           if (requiresUpdate) {
+              await supabase.from('trade_logs').update({ 
+                max_favorable_excursion_usd: newMfe,
+                max_adverse_excursion_usd: newMae
+              }).eq('id', log.id);
+           }
+        }
+      }
+    } catch (e) {
+      showToast(`❌ Lỗi đồng bộ: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleMasterAuto = () => {
     if (!autoData || !vectorRegime) return;
     let dir = vectorRegime.details.l1 === 'Trend Up' ? 'LONG' : 'SHORT'; 
@@ -550,6 +625,13 @@ Nhiệm vụ kiểm toán của bạn:
             autoData={autoData} tradeSetup={tradeSetup} setTradeSetup={setTradeSetup} 
             liveCapital={liveCapital} mathCore={mathCore} tradeStats={tradeStats} 
             symbol={symbol} handleMasterAuto={handleMasterAuto} 
+          />
+          {/* ---> THÊM COMPONENT TRADE JOURNAL VÀO ĐÂY <--- */}
+          <TradeJournal 
+            tradeLogs={tradeLogs} 
+            currentPrice={autoData?.currentPrice} 
+            syncBinanceToSupabase={syncBinanceToSupabase} 
+            isSyncing={isSyncing} 
           />
         </div>
 
