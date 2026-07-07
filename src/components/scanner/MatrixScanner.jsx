@@ -7,8 +7,7 @@ export default function MatrixScanner({
   isScanningBackground,
   sonarEnabled,
   setSonarEnabled,
-  injectScannedSetup,
-  minNotionalMap
+  injectScannedSetup
 }) {
   return (
     <div className="max-w-7xl mx-auto mb-6">
@@ -126,7 +125,7 @@ export default function MatrixScanner({
                     Lev: <span className="text-amber-400 font-bold">{setup.suggestedLeverage}x</span>
                   </div>
                   <div>
-                    Min Size: <span className="text-purple-400">${minNotionalMap[setup.symbol] || 5.0}</span>
+                    Min Size: <span className="text-purple-400">${getMinNotional(setup.symbol)}</span>
                   </div>
                 </div>
 

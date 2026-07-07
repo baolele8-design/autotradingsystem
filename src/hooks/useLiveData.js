@@ -137,13 +137,10 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs }) {
           } catch (e) { return null; }
         };
 
-        // TRÍCH ĐOẠN (Copy đoạn code này đè vào khoảng dòng 104 trong useLiveData.js)
-
         const requests = [
-          // [SỬA]: Đổi /api/v3/klines sang /fapi/v1/klines để chuẩn Futures
-          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=${intervalTime}&limit=250&t=${ts}`),
-          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=${mtfInterval}&limit=250&t=${ts}`),
-          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=1d&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=${intervalTime}&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=${mtfInterval}&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=1d&limit=250&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/fundingRate&symbol=${symbol}&limit=10&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/openInterest&symbol=${symbol}&t=${ts}`),
           safeFetch(`/api/binance?path=/futures/data/openInterestHist&symbol=${symbol}&period=${intervalTime}&limit=30&t=${ts}`),

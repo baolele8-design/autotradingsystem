@@ -69,23 +69,10 @@ export default function LogicGates({
                 <Target className="w-3.5 h-3.5 shrink-0" /> SNIPER SFP OVERRIDE: Đặc cách vượt lỗi SL quá sát (H1) nhờ cấu trúc quét SFP (Điểm &ge; 7.0). Tối ưu Position Size!
             </div>
           )}
-          {/* HIỂN THỊ CAPITULATION SNIPER */}
-          {logicGates.isCapitulationSniper && (
-            <div className="bg-red-500/20 border border-red-500/50 p-2 rounded mt-2 text-[9px] font-bold text-red-400 flex items-center gap-1.5 animate-pulse">
-                <Target className="w-3.5 h-3.5 shrink-0" /> CAPI-SNIPER OVERRIDE: Đặc cách bẻ cổng [Trend] & [SL Quá mỏng]. Setup kết hợp RSI Cực Đại + SFP + Phân kỳ ngầm CMF! Hoàn hảo cho Vốn nhỏ.
-            </div>
-          )}
-
-          {/* HIỂN THỊ MICRO-SQUEEZE */}
-          {logicGates.isMicroSqueeze && (
-            <div className="bg-cyan-500/20 border border-cyan-500/50 p-2 rounded mt-2 text-[9px] font-bold text-cyan-400 flex items-center gap-1.5 animate-pulse">
-                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> MICRO-SQUEEZE OVERRIDE: Bẻ cổng [Volume Chết] & [Range]. BBW đang nén cực độ, OI Delta Spiking, chực chờ phá vỡ! 
-            </div>
-          )}
           
           {logicGates.isHighRROverride && (
-            <div className="bg-purple-500/20 border border-purple-500/50 p-2 rounded mt-2 text-[9px] font-bold text-purple-400 flex items-center gap-1.5 animate-pulse">
-                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> ASYMMETRIC PAYOFF: Đặc cách bẻ cổng Volume cạn nhờ R:R ròng siêu cao (&ge; 2.5). Đòn bẩy tỷ lệ cược vốn nhỏ!
+            <div className="bg-cyan-500/20 border border-cyan-500/50 p-2 rounded mt-2 text-[9px] font-bold text-cyan-400 flex items-center gap-1.5 animate-pulse">
+                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> ASYMMETRIC PAYOFF OVERRIDE: Đặc cách vượt lỗi Volume cạn (H6) nhờ R:R ròng siêu cao (&ge; 2.5). Đòn bẩy tỷ lệ cược vốn nhỏ!
             </div>
           )}
           <button disabled={!logicGates.isApproved} onClick={handleSaveTradeLog} className={`w-full py-3 rounded-lg font-black text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all duration-300 shadow-xl

@@ -10,7 +10,6 @@ export default function OrderForm({
   mathCore,
   tradeStats,
   symbol,
-  minNotionalMap,
   handleMasterAuto
 }) {
   return (
@@ -77,9 +76,7 @@ export default function OrderForm({
               <div className="text-[8px] text-red-500 font-bold text-right -mt-2">⚠️ LỖI: SIZE BỊ ÉP VƯỢT RỦI RO SINH TỒN ({'>'} 5% VỐN)</div>
             )}
             {!mathCore.hasMinNotionalError && mathCore.isSizeForcedByExchange && (
-              <div className="text-[8px] text-amber-500 font-bold text-right -mt-2">
-                ⚠️ CẢNH BÁO: SIZE ĐÃ BỊ ÉP LÊN MỨC TỐI THIỂU CỦA SÀN (${minNotionalMap[symbol] || 5.0})
-              </div>
+              <div className="text-[8px] text-amber-500 font-bold text-right -mt-2">⚠️ CẢNH BÁO: SIZE ĐÃ BỊ ÉP LÊN MỨC TỐI THIỂU CỦA SÀN (${getMinNotional(symbol)})</div>
             )}
 
             <div className="flex justify-between items-end border-b border-slate-800 pb-1.5">
