@@ -1,16 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrainCircuit, Activity, Loader2, ServerCrash, Bell } from 'lucide-react';
-
-// 1. SERVICES & CORE
 import QuantMath from './core/QuantMath';
-import { getMinNotional } from './config/constants';
 import { supabase } from './services/supabase';
-
-// 2. HOOKS
 import useLiveData from './hooks/useLiveData';
 import useMatrixScanner from './hooks/useMatrixScanner';
-
-// 3. COMPONENTS
 import MatrixScanner from './components/scanner/MatrixScanner';
 import LiveMetrics from './components/terminal/LiveMetrics';
 import VectorState from './components/terminal/VectorState';
@@ -33,7 +26,7 @@ export default function AntiFragileTerminal() {
 
   const [tradeSetup, setTradeSetup] = useState({
     tradeType: 'FUTURES', direction: 'LONG', execution: 'LIMIT', 
-    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0  
+    riskPercent: 2.0, entry: 0, slTech: 0, tp1: 0  
   });
 
   const [tradeLogs, setTradeLogs] = useState([]);
@@ -46,6 +39,30 @@ export default function AntiFragileTerminal() {
   const [geminiCooldown, setGeminiCooldown] = useState(0);
 
   const [isSyncing, setIsSyncing] = useState(false); //(State cho Auto Sync)
+  // ============================================================================
+  // TẢI MIN NOTIONAL TỪ BINANCE EXCHANGE INFO NGAY KHI APP KHỞI ĐỘNG
+  // ============================================================================
+  const [minNotionalMap, setMinNotionalMap] = useState({});
+  useEffect(() => {
+    const fetchExchangeInfo = async () => {
+      try {
+        const res = await fetch(`/api/binance?path=/fapi/v1/exchangeInfo`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.symbols) {
+           const newMap = {};
+           data.symbols.forEach(symObj => {
+               const notionalFilter = symObj.filters.find(f => f.filterType === 'MIN_NOTIONAL');
+               if (notionalFilter) {
+                   newMap[symObj.symbol] = parseFloat(notionalFilter.notional);
+               }
+           });
+           setMinNotionalMap(newMap);
+        }
+      } catch (err) { console.error("Lỗi kéo ExchangeInfo:", err); }
+    };
+    fetchExchangeInfo();
+  }, []);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
@@ -58,9 +75,10 @@ export default function AntiFragileTerminal() {
     autoData, cmcData, apiMacro
   } = useLiveData({ symbol, intervalTime, indicatorSpecs });
 
-  const { 
-    scannedTopSetups, isScanningBackground, sonarEnabled, setSonarEnabled 
-  } = useMatrixScanner({ liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast });
+  // Bơm minNotionalMap vào Radar
+  const { scannedTopSetups, isScanningBackground, sonarEnabled, setSonarEnabled } = useMatrixScanner({ 
+    liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast, minNotionalMap 
+  });
 
   // ============================================================================
   // C. DB LỊCH SỬ GIAO DỊCH (GLOBAL JOURNAL)
@@ -199,7 +217,7 @@ export default function AntiFragileTerminal() {
     let positionSizeUSD = riskAmountUSD / slPercentForSize; 
     if (!isFinite(positionSizeUSD) || isNaN(positionSizeUSD)) positionSizeUSD = 0;
 
-    const targetMinThreshold = getMinNotional(symbol);
+    const targetMinThreshold = minNotionalMap[symbol] || 5.0;
     let hasMinNotionalError = false; let isSizeForcedByExchange = false;
     if (positionSizeUSD > 0 && positionSizeUSD < targetMinThreshold) {
         positionSizeUSD = targetMinThreshold; isSizeForcedByExchange = true;
@@ -613,6 +631,7 @@ BẤT DI BẤT DỊCH:
         sonarEnabled={sonarEnabled}
         setSonarEnabled={setSonarEnabled}
         injectScannedSetup={injectScannedSetup}
+        minNotionalMap={minNotionalMap}
       />
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -624,7 +643,8 @@ BẤT DI BẤT DỊCH:
           <OrderForm 
             autoData={autoData} tradeSetup={tradeSetup} setTradeSetup={setTradeSetup} 
             liveCapital={liveCapital} mathCore={mathCore} tradeStats={tradeStats} 
-            symbol={symbol} handleMasterAuto={handleMasterAuto} 
+            symbol={symbol} handleMasterAuto={handleMasterAuto}
+            minNotionalMap={minNotionalMap}
           />
           {/* ---> THÊM COMPONENT TRADE JOURNAL VÀO ĐÂY <--- */}
           <TradeJournal 
@@ -632,7 +652,7 @@ BẤT DI BẤT DỊCH:
             currentPrice={autoData?.currentPrice} 
             syncBinanceToSupabase={syncBinanceToSupabase} 
             isSyncing={isSyncing} 
-            binancePositions={binancePositions} // [MỚI ĐƯỢC CẤP]
+            binancePositions={binancePositions}
           />
         </div>
 

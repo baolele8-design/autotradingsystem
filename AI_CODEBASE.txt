@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 07, 2026, 06:57 PM ---
+--- START OF FILE Paste Jul 07, 2026, 07:35 PM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -304,18 +304,47 @@ export default function AntiFragileTerminal() {
 
     const hardPassed = hardGates.every(g => g.passed);
     const failedGates = hardGates.filter(g => !g.passed);
-    const isOnlyRegimeFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h3_2');
+    
     const isSafeFromKnife = tradeSetup.direction === 'LONG' ? (autoData.cmf > 0.15 && autoData.rsi > 35) : (autoData.cmf < -0.15 && autoData.rsi < 65);
+    const isOnlyRegimeFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h3_2');
     const isGoldenOverride = isOnlyRegimeFailed && (score >= 8.5) && synergyText !== "" && isSafeFromKnife;
     
-    const isOnlySLFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h1');
-    const isSniperOverride = isOnlySLFailed && checkS3 && score >= 7.0;
+    // ========================================================================
+    // 🧠 CHIẾN THUẬT 1: CAPITULATION SNIPER (Săn Râu Bắt Đáy/Đỉnh Khắc Nghiệt)
+    // ========================================================================
+    // Bỏ qua lỗi H1 (SL quá sát) VÀ H3_1 (Ngược Trend). 
+    // Điều kiện: RSI cực đại (< 30 hoặc > 70) + Phải có mô hình SFP + Dòng tiền CMF đang ngầm gom (> 0.1)
+    const isCapitulationSniper = failedGates.length > 0 
+      && failedGates.every(g => g.id === 'h1' || g.id === 'h3_1') 
+      && checkS3 // Phải có SFP
+      && (tradeSetup.direction === 'LONG' ? (autoData.rsi < 30 && autoData.cmf > 0.1) : (autoData.rsi > 70 && autoData.cmf < -0.1))
+      && score >= 7.0;
 
+    // ========================================================================
+    // 🧠 CHIẾN THUẬT 2: MICRO-SQUEEZE (Bắt Nén Cạn Thanh Khoản)
+    // ========================================================================
+    // Bỏ qua lỗi H3_1 (Không có xu hướng) VÀ H6 (Volume đóng nến cạn kiệt).
+    // Điều kiện: Đang bị Nén (BBW < 25) + OI Spiking (Dồn nén phe kẹt) + Dòng tiền thuận chiều bùng nổ
+    const isMicroSqueeze = failedGates.length > 0
+      && failedGates.every(g => g.id === 'h3_1' || g.id === 'h6')
+      && (l2 === 'Compression' || autoData.bbwRank < 25)
+      && autoData.isOiSpiking
+      && (tradeSetup.direction === 'LONG' ? autoData.cmf > 0.1 : autoData.cmf < -0.1)
+      && score >= 6.5;
+
+    // ========================================================================
+    // CHIẾN THUẬT 3 (Cũ): ASYMMETRIC PAYOFF
+    // ========================================================================
     const isOnlyVolFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h6');
     const isHighRROverride = isOnlyVolFailed && parseFloat(mathCore.theoreticalRR) >= 2.5 && score >= 7.0;
 
-    const isApproved = (hardPassed || isGoldenOverride || isSniperOverride || isHighRROverride) && (score >= 6.5); 
-    return { hardGates, softGates, softScore: score, isApproved, isGoldenOverride, isSniperOverride, isHighRROverride };
+    // QUYẾT ĐỊNH CUỐI CÙNG TỪ TỔNG ĐÀI
+    const isApproved = (hardPassed || isGoldenOverride || isCapitulationSniper || isMicroSqueeze || isHighRROverride) && (score >= 6.5); 
+    
+    return { 
+      hardGates, softGates, softScore: score, isApproved, 
+      isGoldenOverride, isCapitulationSniper, isMicroSqueeze, isHighRROverride 
+    };
   }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol]);
 
   // ============================================================================
@@ -989,10 +1018,23 @@ export default function LogicGates({
                 <Target className="w-3.5 h-3.5 shrink-0" /> SNIPER SFP OVERRIDE: Đặc cách vượt lỗi SL quá sát (H1) nhờ cấu trúc quét SFP (Điểm &ge; 7.0). Tối ưu Position Size!
             </div>
           )}
+          {/* HIỂN THỊ CAPITULATION SNIPER */}
+          {logicGates.isCapitulationSniper && (
+            <div className="bg-red-500/20 border border-red-500/50 p-2 rounded mt-2 text-[9px] font-bold text-red-400 flex items-center gap-1.5 animate-pulse">
+                <Target className="w-3.5 h-3.5 shrink-0" /> CAPI-SNIPER OVERRIDE: Đặc cách bẻ cổng [Trend] & [SL Quá mỏng]. Setup kết hợp RSI Cực Đại + SFP + Phân kỳ ngầm CMF! Hoàn hảo cho Vốn nhỏ.
+            </div>
+          )}
+
+          {/* HIỂN THỊ MICRO-SQUEEZE */}
+          {logicGates.isMicroSqueeze && (
+            <div className="bg-cyan-500/20 border border-cyan-500/50 p-2 rounded mt-2 text-[9px] font-bold text-cyan-400 flex items-center gap-1.5 animate-pulse">
+                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> MICRO-SQUEEZE OVERRIDE: Bẻ cổng [Volume Chết] & [Range]. BBW đang nén cực độ, OI Delta Spiking, chực chờ phá vỡ! 
+            </div>
+          )}
           
           {logicGates.isHighRROverride && (
-            <div className="bg-cyan-500/20 border border-cyan-500/50 p-2 rounded mt-2 text-[9px] font-bold text-cyan-400 flex items-center gap-1.5 animate-pulse">
-                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> ASYMMETRIC PAYOFF OVERRIDE: Đặc cách vượt lỗi Volume cạn (H6) nhờ R:R ròng siêu cao (&ge; 2.5). Đòn bẩy tỷ lệ cược vốn nhỏ!
+            <div className="bg-purple-500/20 border border-purple-500/50 p-2 rounded mt-2 text-[9px] font-bold text-purple-400 flex items-center gap-1.5 animate-pulse">
+                <TrendingUp className="w-3.5 h-3.5 shrink-0" /> ASYMMETRIC PAYOFF: Đặc cách bẻ cổng Volume cạn nhờ R:R ròng siêu cao (&ge; 2.5). Đòn bẩy tỷ lệ cược vốn nhỏ!
             </div>
           )}
           <button disabled={!logicGates.isApproved} onClick={handleSaveTradeLog} className={`w-full py-3 rounded-lg font-black text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all duration-300 shadow-xl
@@ -1989,9 +2031,9 @@ export default function useMatrixScanner({ liveCapital, autoData, mvrvZScore, tr
   const [isScanningBackground, setIsScanningBackground] = useState(false);
   const [sonarEnabled, setSonarEnabled] = useState(false);
   
+  const [dynamicPool, setDynamicPool] = useState(POOL_SYMBOLS);
   const prevScannedSigRef = useRef('');
 
-  // Đưa các refs vào bên trong Hook để App.jsx không cần bận tâm nữa
   const liveCapitalRef = useRef(liveCapital);
   const autoDataRef = useRef(autoData);
   const mvrvZScoreRef = useRef(mvrvZScore);
@@ -2003,6 +2045,45 @@ export default function useMatrixScanner({ liveCapital, autoData, mvrvZScore, tr
   useEffect(() => { mvrvZScoreRef.current = mvrvZScore; }, [mvrvZScore]);
   useEffect(() => { tradeFeesRef.current = tradeFees; }, [tradeFees]);
   useEffect(() => { apiMacroRef.current = apiMacro; }, [apiMacro]);
+
+  // ĐỘNG CƠ XOAY TUA NARRATIVE (Chạy mỗi 15 phút)
+  useEffect(() => {
+    let isMounted = true;
+    const fetchTrendingCoins = async () => {
+      try {
+        // Gọi API 24h ticker qua Proxy Vercel
+        const res = await fetch(`/api/binance?path=/fapi/v1/ticker/24hr&t=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Lọc các cặp USDT, loại bỏ Stablecoin/Token nhiễu
+        const validMarkets = data.filter(d => 
+          d.symbol.endsWith('USDT') && 
+          !d.symbol.includes('USDC') && !d.symbol.includes('TUSD')
+        );
+
+        // Sort theo Quote Volume (Dòng tiền mạnh nhất)
+        validMarkets.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
+        
+        // Cố định BTC, ETH. Bốc thêm 7 Altcoin top đầu Volume.
+        const topAlts = validMarkets
+          .filter(d => d.symbol !== 'BTCUSDT' && d.symbol !== 'ETHUSDT')
+          .slice(0, 7)
+          .map(d => d.symbol);
+
+        const newPool = ['BTCUSDT', 'ETHUSDT', ...topAlts];
+        
+        if (isMounted) {
+          setDynamicPool(newPool);
+          console.log("🔥 ĐÃ XOAY TUA NARRATIVE TREND:", newPool);
+        }
+      } catch (e) { console.error("Lỗi xoay tua Pool", e); }
+    };
+
+    fetchTrendingCoins();
+    const poolTimer = setInterval(fetchTrendingCoins, 15 * 60 * 1000); // 15 phút 1 lần
+    return () => { isMounted = false; clearInterval(poolTimer); };
+  }, []);
 
   // Động cơ Scanner chính
   useEffect(() => {
@@ -2058,7 +2139,8 @@ export default function useMatrixScanner({ liveCapital, autoData, mvrvZScore, tr
         }
 
         const fetchTasks = [];
-        for (const targetSymbol of POOL_SYMBOLS) {
+        // [CẬP NHẬT Ở ĐÂY]: Dùng dynamicPool thay vì POOL_SYMBOLS
+        for (const targetSymbol of dynamicPool) { 
           for (const targetInterval of POOL_INTERVALS) {
             fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
@@ -2309,8 +2391,9 @@ export default function useMatrixScanner({ liveCapital, autoData, mvrvZScore, tr
             let suggestedLeverage = Math.max(1, Math.ceil(positionSizeUSD / (capitalSafe * 0.9)));
 
             let overrideTag = '';
-            if (isSniperOverride) overrideTag = '🎯 SNIPER';
+            if (isCapitulationSniper) overrideTag = '🎯 CAPI-SNIPER';
             else if (isHighRROverride) overrideTag = '🚀 ASYM-RR';
+            else if (isMicroSqueeze) overrideTag = '🗜️ MICRO-SQUEEZE';
             else if (isGoldenOverride) overrideTag = '⚡ GOLDEN';
 
             scanResultsPool.push({
