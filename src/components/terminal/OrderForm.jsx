@@ -58,7 +58,7 @@ export default function OrderForm({
             if (parseFloat(finalSl) > 0) {
                 batch.push({ 
                     symbol: symbol, side: exitSide, type: 'STOP_MARKET', 
-                    stopPrice: finalSl, closePosition: "true", workingType: "MARK_PRICE" 
+                    triggerPrice: finalSl, closePosition: "true", workingType: "MARK_PRICE" // Sửa stopPrice thành triggerPrice
                 });
             }
 
@@ -66,7 +66,7 @@ export default function OrderForm({
             if (parseFloat(finalTp) > 0) {
                 batch.push({ 
                     symbol: symbol, side: exitSide, type: 'TAKE_PROFIT_MARKET', 
-                    stopPrice: finalTp, closePosition: "true", workingType: "MARK_PRICE" 
+                    triggerPrice: finalTp, closePosition: "true", workingType: "MARK_PRICE" // Sửa stopPrice thành triggerPrice
                 });
             }
 

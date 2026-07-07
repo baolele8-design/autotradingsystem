@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 07, 2026, 11:32 PM ---
+--- START OF FILE Paste Jul 08, 2026, 12:20 AM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -513,9 +513,22 @@ BẤT DI BẤT DỊCH:
     const sl = dir === 'LONG' ? suggestedEntry - (slMult * autoData.atr14) : suggestedEntry + (slMult * autoData.atr14);
     const tp1 = dir === 'LONG' ? suggestedEntry + (tpMult * autoData.atr14) : suggestedEntry - (tpMult * autoData.atr14);
 
-    setTradeSetup(prev => ({ ...prev, direction: dir, execution: execType, entry: parseFloat(suggestedEntry.toFixed(4)), slTech: parseFloat(sl.toFixed(4)), tp1: parseFloat(tp1.toFixed(4)) }));
+    // BẢN VÁ: Đọc chính xác độ dài thập phân của đồng coin hiện tại (tickSize)
+    const tick = tickSizes[symbol] || 0.0001;
+    const tickStr = parseFloat(tick).toString();
+    const precision = tickStr.includes('e-') ? parseInt(tickStr.split('e-')[1]) : (tickStr.includes('.') ? tickStr.split('.')[1].length : 4);
+
+    setTradeSetup(prev => ({ 
+      ...prev, 
+      direction: dir, 
+      execution: execType, 
+      entry: Number(suggestedEntry.toFixed(precision)), 
+      slTech: Number(sl.toFixed(precision)), 
+      tp1: Number(tp1.toFixed(precision)) 
+    }));
+    
     if (!(autoData.rsi >= 45 && autoData.rsi <= 55 && (vectorRegime.details.l1 === 'Range' || vectorRegime.details.l2 === 'Extreme'))) {
-        showToast("✅ Đã khởi tạo Template. Hãy check cảnh báo Min Notional bên dưới!");
+        showToast("✅ Đã khởi tạo Template động theo TickSize của Binance!");
     }
   };
 
@@ -1026,16 +1039,23 @@ export default function OrderForm({
     }
 
     setIsExecuting(true);
-    setExecStatus('Đang phóng cụm lệnh lên sàn...');
+    setExecStatus('Đang tiền trạm & Phóng lệnh...');
 
     try {
         const step = stepSizes[symbol] || 0.001;
         const tick = tickSizes[symbol] || 0.001;
 
-        // Hàm giúp định dạng số chống lỗi 400 PRICE_FILTER và LOT_SIZE của Binance
         const formatPrecision = (val, size) => {
-            const precision = size.toString().includes('.') ? size.toString().split('.')[1].length : 0;
-            return parseFloat(val).toFixed(precision);
+            let strVal = String(val);
+            if (strVal.includes(',')) strVal = strVal.includes('.') ? strVal.replace(/,/g, '') : strVal.replace(/,/g, '.');
+            const cleanNum = parseFloat(strVal);
+
+            const sizeStr = parseFloat(size).toString();
+            let precision = 0;
+            if (sizeStr.includes('e-')) precision = parseInt(sizeStr.split('e-')[1]);
+            else if (sizeStr.includes('.')) precision = sizeStr.split('.')[1].length;
+
+            return isNaN(cleanNum) ? "0" : cleanNum.toFixed(precision);
         };
 
         const rawQty = parseFloat(mathCore.positionSizeUSD) / tradeSetup.entry;
@@ -1049,7 +1069,7 @@ export default function OrderForm({
             const side = tradeSetup.direction === 'LONG' ? 'BUY' : 'SELL';
             const exitSide = tradeSetup.direction === 'LONG' ? 'SELL' : 'BUY';
 
-            // 1. Lệnh Entry (Market không gửi price)
+            // 1. Lệnh Entry
             batch.push({
                 symbol: symbol,
                 side: side,
@@ -1058,43 +1078,59 @@ export default function OrderForm({
                 ...(tradeSetup.execution === 'LIMIT' ? { price: finalEntry, timeInForce: 'GTC' } : {})
             });
 
-            // 2. Lệnh Stoploss Cứng
+            // 2. Lệnh Stoploss Cứng (Có thêm MARK_PRICE)
             if (parseFloat(finalSl) > 0) {
-                batch.push({
-                    symbol: symbol, side: exitSide, type: 'STOP_MARKET',
-                    stopPrice: finalSl, closePosition: "true", timeInForce: 'GTE_GTC'
+                batch.push({ 
+                    symbol: symbol, side: exitSide, type: 'STOP_MARKET', 
+                    stopPrice: finalSl, closePosition: "true", workingType: "MARK_PRICE" 
                 });
             }
 
-            // 3. Lệnh Take Profit
+            // 3. Lệnh Take Profit (Có thêm MARK_PRICE)
             if (parseFloat(finalTp) > 0) {
-                batch.push({
-                    symbol: symbol, side: exitSide, type: 'TAKE_PROFIT_MARKET',
-                    stopPrice: finalTp, closePosition: "true", timeInForce: 'GTE_GTC'
+                batch.push({ 
+                    symbol: symbol, side: exitSide, type: 'TAKE_PROFIT_MARKET', 
+                    stopPrice: finalTp, closePosition: "true", workingType: "MARK_PRICE" 
                 });
             }
+
+            const payload = {
+                symbol: symbol,
+                leverage: mathCore.suggestedLeverage,
+                marginType: 'ISOLATED',
+                batchOrders: batch
+            };
 
             // ---------------------------------------------------------
-            // CẦU NỐI LƯỢNG TỬ: CHUYỂN HƯỚNG BẮN LỆNH XUỐNG LOCAL BRIDGE
+            // CẦU NỐI LƯỢNG TỬ (Gửi mảng batch đã dọn dẹp)
             // ---------------------------------------------------------
             const LOCAL_BRIDGE_URL = 'http://localhost:1337/api/execute-batch';
             
             const res = await fetch(LOCAL_BRIDGE_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ batchOrders: batch })
+                body: JSON.stringify(payload)
             });
-            const data = await res.json();
             
-            if (!res.ok) throw new Error(data.details?.msg || data.error || 'Bridge Rejected');
-            setExecStatus('✅ ĐÃ KHỚP CỤM LỆNH LIÊN HOÀN (LOCAL EXECUTION)!');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.details?.msg || data.error || 'Bridge Cục bộ từ chối.');
+
+            // BỘ QUÉT LỖI ẨN CỦA BINANCE (Phát hiện lỗi TP/SL bị rớt)
+            if (Array.isArray(data)) {
+                const errors = data.filter(r => r.error === true || r.code !== undefined);
+                if (errors.length > 0) {
+                    console.error("LỖI CHI TIẾT TỪ BINANCE:", errors);
+                    throw new Error(`Entry đã khớp nhưng sàn TỪ CHỐI ${errors.length} lệnh SL/TP. Vui lòng check ngay trên App Binance!`);
+                }
+            }
+
+            setExecStatus('✅ ĐÃ KHỚP CỤM LỆNH LIÊN HOÀN!');
             setTimeout(() => setExecStatus(''), 5000);
-            // ---------------------------------------------------------
         } else {
             setExecStatus('❌ Cụm lệnh hiện chỉ hỗ trợ Futures.');
         }
     } catch (err) {
-        setExecStatus('❌ LỖI BINANCE: ' + err.message);
+        setExecStatus('❌ LỖI: ' + err.message);
     }
     setIsExecuting(false);
   };
