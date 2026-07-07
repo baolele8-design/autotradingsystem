@@ -63,7 +63,7 @@ export default function AntiFragileTerminal() {
   } = useMatrixScanner({ liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast });
 
   // ============================================================================
-  // C. DB LỊCH SỬ GIAO DỊCH & COOLDOWN
+  // C. DB LỊCH SỬ GIAO DỊCH (GLOBAL JOURNAL)
   // ============================================================================
   useEffect(() => {
     if (geminiCooldown > 0) { 
@@ -72,39 +72,42 @@ export default function AntiFragileTerminal() {
     }
   }, [geminiCooldown]);
 
+  // Lấy TOÀN BỘ nhật ký để render TradeJournal
   useEffect(() => {
     if (!supabase) return;
     const fetchLogs = async () => {
       try {
-        const { data, error } = await supabase.from('trade_logs').select('*').order('created_at', { ascending: false }).limit(200);
-        if (!error && data) {
-          setTradeLogs(data);
-          const closedTrades = data.filter(d => ['WIN', 'LOSS', 'PARTIAL_CLOSED'].includes(d.status) && d.symbol === symbol);
-          let totalWinR = 0; let winCount = 0; let totalLossR = 0; let lossCount = 0;
-
-          closedTrades.forEach(t => {
-             const rMultiple = (parseFloat(t.pnl_usd) || 0) / (parseFloat(t.risk_amount_usd) || 1);
-             if (t.pnl_usd > 0) { totalWinR += rMultiple; winCount++; }
-             if (t.pnl_usd <= 0 && t.status === 'LOSS') { totalLossR += Math.abs(rMultiple); lossCount++; }
-          });
-          setTradeStats({ 
-            totalClosed: closedTrades.length, 
-            winRate: closedTrades.length > 0 ? (winCount / closedTrades.length) : 0, 
-            avgWinR: winCount > 0 ? (totalWinR / winCount) : 0, 
-            avgLossR: lossCount > 0 ? (totalLossR / lossCount) : 1, 
-            historicalRR: (lossCount > 0 ? (totalLossR / lossCount) : 1) > 0 ? ((winCount > 0 ? (totalWinR / winCount) : 0) / (lossCount > 0 ? (totalLossR / lossCount) : 1)) : 0,
-            hasEnoughData: closedTrades.length >= 30 
-          });
-        }
+        const { data, error } = await supabase.from('trade_logs').select('*').order('created_at', { ascending: false }).limit(300);
+        if (!error && data) setTradeLogs(data);
       } catch (err) { console.error(err); }
     };
     fetchLogs();
     const subscription = supabase.channel('public:trade_logs').on('postgres_changes', { event: '*', schema: 'public', table: 'trade_logs' }, (payload) => {
-        if (payload.eventType === 'INSERT') setTradeLogs(current => [payload.new, ...current].slice(0, 200));
+        if (payload.eventType === 'INSERT') setTradeLogs(current => [payload.new, ...current].slice(0, 300));
         else if (payload.eventType === 'UPDATE') setTradeLogs(current => current.map(log => log.id === payload.new.id ? payload.new : log));
       }).subscribe();
     return () => supabase.removeChannel(subscription);
-  }, [symbol]);
+  }, []); // Bỏ 'symbol' khỏi dependencies để không bị re-fetch, giữ sổ tay là Global
+
+  // Dùng useMemo để tính toán thống kê (Bayesian) CHỈ cho symbol hiện tại
+  useEffect(() => {
+    const closedTrades = tradeLogs.filter(d => ['WIN', 'LOSS', 'PARTIAL_CLOSED'].includes(d.status) && d.symbol === symbol);
+    let totalWinR = 0; let winCount = 0; let totalLossR = 0; let lossCount = 0;
+
+    closedTrades.forEach(t => {
+       const rMultiple = (parseFloat(t.pnl_usd) || 0) / (parseFloat(t.risk_amount_usd) || 1);
+       if (t.pnl_usd > 0) { totalWinR += rMultiple; winCount++; }
+       if (t.pnl_usd <= 0 && t.status === 'LOSS') { totalLossR += Math.abs(rMultiple); lossCount++; }
+    });
+    setTradeStats({ 
+      totalClosed: closedTrades.length, 
+      winRate: closedTrades.length > 0 ? (winCount / closedTrades.length) : 0, 
+      avgWinR: winCount > 0 ? (totalWinR / winCount) : 0, 
+      avgLossR: lossCount > 0 ? (totalLossR / lossCount) : 1, 
+      historicalRR: (lossCount > 0 ? (totalLossR / lossCount) : 1) > 0 ? ((winCount > 0 ? (totalWinR / winCount) : 0) / (lossCount > 0 ? (totalLossR / lossCount) : 1)) : 0,
+      hasEnoughData: closedTrades.length >= 30 
+    });
+  }, [tradeLogs, symbol]);
 
   // ============================================================================
   // D. KHỐI TÍNH TOÁN LƯỢNG TỬ (QUANTUM MATH MEMO)
@@ -310,121 +313,92 @@ export default function AntiFragileTerminal() {
   }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol]);
 
   // ============================================================================
-  // E. CÁC HÀM XỬ LÝ (ACTIONS)
+  // E. CÁC HÀM XỬ LÝ (ACTIONS) - UPGRADED
   // ============================================================================
-  const runGeminiAnalysis = async () => { /* Giữ nguyên toàn bộ logic gọi Gemini API ở đây */ 
+  const runGeminiAnalysis = async () => {
     if (geminiCooldown > 0 || !autoData || !mathCore || !vectorRegime) return;
     setIsAnalyzing(true); setAiAnalysis('Đang kích hoạt Hội đồng 5 Nhà Phân tích Kỹ thuật (Gemini 3.1 Flash-Lite)...');
     
     try {
-      const basePromptContext = `Hệ thống ANTI-FRAGILE V5.5.0 Quantum Terminal. 
-Mã giao dịch: ${symbol} | Khung LTF: ${intervalTime}
-Chi tiết Setup: ${tradeSetup.tradeType} ${tradeSetup.direction} | Entry: $${tradeSetup.entry} | SL: $${tradeSetup.slTech} | TP: $${tradeSetup.tp1}
-Trạng thái Cửa: ${logicGates.isApproved ? "ĐẠT (Cho phép giao dịch)" : "THẤT BẠI (Lệnh đang bị Block bởi Logic Gates)"}
-Chỉ số Định lượng: Điểm Soft Gate: ${logicGates.softScore}/10.0 | True EV: ${mathCore.trueEVValue}R | Net R:R: 1:${mathCore.theoreticalRR}
-Không gian Vector Thị trường [L1-L6]: [${vectorRegime.vector.join(', ')}]`;
+      // 1. DATA FEED SIÊU CHI TIẾT (Đưa toàn bộ sinh trắc học hệ thống vào Prompt)
+      const basePromptContext = `[ANTI-FRAGILE QUANTUM TERMINAL V5.5.0]
+- TÀI SẢN: ${symbol} | KHUNG: ${intervalTime} | PHIÊN: ${apiMacro.tradingSession}
+- SETUP: ${tradeSetup.tradeType} ${tradeSetup.direction} | Entry: $${tradeSetup.entry} | SL: $${tradeSetup.slTech} | TP1: $${tradeSetup.tp1}
+- TOÁN HỌC RỦI RO: Size=$${mathCore.positionSizeUSD} | Tỷ lệ R:R=1:${mathCore.theoreticalRR} | True EV=${mathCore.trueEVValue}R | Kelly=${mathCore.kellyPct}%
+- TRẠNG THÁI GATES: ${logicGates.isApproved ? "PASS (Cho phép)" : "BLOCK (Nguy hiểm)"} | Điểm Mềm=${logicGates.softScore}/10.0
+- VECTOR L1-L6: [${vectorRegime.vector.join(', ')}]
+- ĐỘNG HỌC MVRV & DOM: MVRV-Z=${mvrvZScore} | BTC Dom=${autoData.btcDomValue.toFixed(1)}% (Slope: ${autoData.btcDomSlope.toFixed(2)}%)`;
 
       const analysts = [
         {
           id: "Agent_1",
-          role: "Nhà phân tích 1: Xu hướng và Động học cấu trúc EMA (Đại diện Dài hạn)",
-          focusPrompt: `Dữ liệu cấu trúc EMA Range 20 nến: EMA20 Slope = ${autoData.ema20.slope.toFixed(2)}%, EMA50 Slope = ${autoData.ema50.slope.toFixed(2)}%, EMA200 Slope = ${autoData.ema200.slope.toFixed(2)}%. Trạng thái Crossover 20/50: BullCross=${autoData.scan20_50.isCrossBull}, BearCross=${autoData.scan20_50.isCrossBear}. Chỉ số ADX = ${autoData.adx.toFixed(1)}. Đường SMA200 HTF = $${autoData.htfSma200.toFixed(2)}. 
-Hãy phân tích xu hướng dài hạn kết hợp trung/ngắn hạn. Đưa ra 2 câu nhận định cốt lõi và kết luận một con số 'Xác suất ăn: XX%' cụ thể dựa trên xu hướng.`
+          role: "Nhà phân tích Xu hướng & Động học Cấu trúc (Trend & Structure)",
+          focusPrompt: `Dữ liệu cấu trúc EMA (20 nến): Độ dốc EMA20=${autoData.ema20.slope.toFixed(2)}%, EMA50=${autoData.ema50.slope.toFixed(2)}%, EMA200=${autoData.ema200.slope.toFixed(2)}%. HTF SMA200=$${autoData.htfSma200.toFixed(2)}. ADX Trend Strength=${autoData.adx.toFixed(1)}.
+Hãy phân tích độ nén và gia tốc của xu hướng. Bắt buộc kết luận bằng 1 câu chỉ ra 'Xác suất thành công: XX%'.`
         },
         {
           id: "Agent_2",
-          role: "Nhà phân tích 2: Chu kỳ Biến động và Săn Thanh khoản SFP (Đại diện Trung hạn)",
-          focusPrompt: `Dữ liệu biến động và thanh khoản: ATR Rank = P${autoData.atrRank.toFixed(0)} (Giá trị: $${autoData.atr14.toFixed(2)}), BBW Rank = P${autoData.bbwRank.toFixed(0)} (Phần trăm dải: ${autoData.bbw.toFixed(2)}%). Phát hiện SFP Fractal: Bullish SFP = ${autoData.isBullishSFP}, Bearish SFP = ${autoData.isBearishSFP}.
-Hãy phân tích tính nén/giãn của chu kỳ biến động trung hạn và các sự kiện quét thanh khoản vi mô. Đưa ra 2 câu nhận định cốt lõi và kết luận một con số 'Xác suất ăn: XX%' cụ thể.`
+          role: "Nhà phân tích Biến động & Ma sát Giao dịch (Volatility & Cost Drag)",
+          focusPrompt: `Chỉ báo Biến động: ATR=${autoData.atr14.toFixed(2)} (Rank P${autoData.atrRank.toFixed(0)}), BBW Rank=P${autoData.bbwRank.toFixed(0)}.
+Dữ liệu Ma sát: Funding Rate=${autoData.fundingRate.toFixed(4)}% (Slope: ${autoData.fundingSlope.toFixed(4)}%), Real Spread=${apiMacro.realSpreadPct.toFixed(4)}%.
+Hãy đánh giá việc Entry/SL có đủ an toàn so với biến động (ATR) và chi phí ẩn (Cost Drag) hay không.`
         },
         {
           id: "Agent_3",
-          role: "Nhà phân tích 3: Sổ lệnh & Vị thế Dòng tiền Phái sinh (Đại diện Ngắn hạn)",
-          focusPrompt: `Dữ liệu vị thế phái sinh và Orderbook: Delta Open Interest = ${autoData.oiDelta.toFixed(2)}%, Taker Buy/Sell Volume Ratio = ${apiMacro.takerBuySellRatio.toFixed(2)}, Long/Short Account Ratio = ${apiMacro.longShortRatio.toFixed(2)}, L/S Position Volume Ratio = ${apiMacro.lsPositionVolRatio.toFixed(2)}. Real Spread = ${apiMacro.realSpreadPct.toFixed(4)}%.
-Hãy giải mã hành vi của Smart Money đối ứng với Retail trong ngắn hạn. Đưa ra 2 câu nhận định cốt lõi và kết luận một con số 'Xác suất ăn: XX%' cụ thể.`
+          role: "Nhà phân tích Orderflow & Dấu chân Smart Money (Orderbook Engine)",
+          focusPrompt: `Dữ liệu vị thế: OI Delta=${autoData.oiDelta.toFixed(2)}% (Spiking: ${autoData.isOiSpiking}). Taker Buy/Sell=${apiMacro.takerBuySellRatio.toFixed(2)}. L/S Account Ratio=${apiMacro.longShortRatio.toFixed(2)}.
+Phát hiện Phân kỳ OBV: Bearish=${autoData.isObvBearDivergence}, Bullish=${autoData.isObvBullDivergence}.
+Hãy giải mã phe nào đang bị kẹt (Trapped Liquidity) và dự phóng cú Squeeze.`
         },
         {
           id: "Agent_4",
-          role: "Nhà phân tích 4: Động lượng Đa chiều và Áp lực Dòng tiền CMF (Đại diện Trung/Ngắn)",
-          focusPrompt: `Dữ liệu động lượng: RSI = ${autoData.rsi.toFixed(1)}, Chaikin Money Flow (CMF) = ${autoData.cmf.toFixed(2)}. Phân kỳ OBV: OBV Bearish Divergence = ${autoData.isObvBearDivergence}, OBV Bullish Divergence = ${autoData.isObvBullDivergence}.
-Hãy thẩm định áp lực tích lũy/phân phối thực tế của dòng tiền, cảnh báo bẫy động lượng (Fake Momentum). Đưa ra 2 câu nhận định cốt lõi và kết luận một con số 'Xác suất ăn: XX%' cụ thể.`
+          role: "Nhà phân tích Động lượng & Quét Thanh khoản (Momentum & SFP)",
+          focusPrompt: `Dữ liệu: RSI=${autoData.rsi.toFixed(1)}, Dòng tiền Chaikin (CMF)=${autoData.cmf.toFixed(2)}. 
+Tín hiệu SFP (Swing Failure Pattern): Bullish SFP=${autoData.isBullishSFP}, Bearish SFP=${autoData.isBearishSFP}.
+Thẩm định xem cú trade này là Fakeout (Bẫy) hay một cú Breakout/Reversal chân thực.`
         },
         {
           id: "Agent_5",
-          role: "Nhà phân tích 5: Định giá Chu kỳ Vĩ mô và Động học BTC Dominance (Đại diện Dài/Trung)",
-          focusPrompt: `Dữ liệu vĩ mô và thanh lý: MVRV Z-Score = ${mvrvZScore} (${vectorRegime.details.mvrvDesc}), BTC Dominance = ${autoData.btcDomValue.toFixed(2)}% (MTF Slope: ${autoData.btcDomSlope.toFixed(2)}%), Phiên giao dịch = ${apiMacro.tradingSession} (Hệ số nhiễu: ${apiMacro.sessionMultiplier}), Funding Rate Slope = ${autoData.fundingSlope.toFixed(4)}.
-Hãy đánh giá rủi ro hệ thống vĩ mô, hướng luân chuyển dòng tiền dựa trên độ dốc BTC Dominance (Altcoin Season hay Bleeding?), áp lực bẫy thanh lý (Squeeze). Đưa ra 2 câu nhận định cốt lõi và kết luận một con số 'Xác suất ăn: XX%' cụ thể.`
+          role: "Nhà quản trị Rủi ro Tồn tại (Survival Risk & Liquidation)",
+          focusPrompt: `Đòn bẩy dự kiến: ${mathCore.suggestedLeverage}x. Rủi ro thực tế: $${mathCore.riskAmountUSD}.
+Khoảng cách Thanh lý (Safety Margin): ${mathCore.liqSafetyMargin > 0 ? (mathCore.liqSafetyMargin*100).toFixed(0)+'%' : 'N/A'}. Cảnh báo Min Notional: ${mathCore.hasMinNotionalError}.
+Hãy đánh giá rủi ro cháy tài khoản (Ruin Risk) nếu gặp Flash Crash.`
         }
       ];
 
-      const subAgentPromises = analysts.map(agent => {
-        const fullInput = `${basePromptContext}\n\nVai trò của bạn: ${agent.role}\n${agent.focusPrompt}`;
-        return fetch(`/api/gemini`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: "gemini-3.1-flash-lite", 
-            input: fullInput,
-            generation_config: { thinking_level: "minimal" } 
-          })
-        })
-        .then(res => res.json())
-        .then(data => {
-          const content = data.steps?.find(s => s.type === 'model_output')?.content?.[0]?.text || 'Lỗi trích xuất dữ liệu phân tích.';
-          return `--- BÁO CÁO TỪ TRỢ LÝ: ${agent.role} ---\n${content}\n`;
-        })
-        .catch(err => `--- BÁO CÁO TỪ TRỢ LÝ: ${agent.role} ---\n[CRASH] Không thể kết nối API: ${err.message}\n`);
-      });
+      const subAgentPromises = analysts.map(agent => 
+        fetch(`/api/gemini`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: "gemini-3.1-flash-lite", input: `${basePromptContext}\n\nVai trò: ${agent.role}\n${agent.focusPrompt}`, generation_config: { thinking_level: "minimal" } })
+        }).then(res => res.json()).then(data => `--- BÁO CÁO: ${agent.role} ---\n${data.steps?.find(s => s.type === 'model_output')?.content?.[0]?.text || 'Lỗi.'}\n`).catch(err => `--- BÁO CÁO: ${agent.role} ---\n[CRASH] ${err.message}\n`)
+      );
 
       const councilReports = await Promise.all(subAgentPromises);
-      const combinedReportsText = councilReports.join("\n");
+      setAiAnalysis('Hội đồng đã đệ trình. Đang chuyển cho Giám đốc Phán quyết tối cao (Gemini 3.5 Flash)...');
 
-      setAiAnalysis('Hội đồng đã đệ trình báo cáo. Đang chuyển dữ liệu cho Giám đốc Phán quyết tối cao (Gemini 3.5 Flash)...');
+      // 2. MASTER PROMPT KÈM LỊCH SỬ BAYESIAN
+      const masterPrompt = `HỆ THỐNG MASTER CONTROLLER (ANTI-FRAGILE V5.5). Vai trò: Giám đốc Rủi ro tối cao (CRO).
+Dữ liệu từ 5 Đặc vụ:
+${councilReports.join("\n")}
 
-      const recentTrades = tradeLogs
-        .filter(t => t.status === 'WIN' || t.status === 'LOSS')
-        .slice(0, 5)
-        .map(t => `[${t.symbol} | ${t.market_regime?.split('|')[0]?.trim()}] ${t.direction}: ${t.status} (PnL: $${t.pnl_usd})`);
+LỊCH SỬ BAYESIAN (Thói quen Trader trên cặp ${symbol}): Winrate ${(tradeStats.winRate * 100).toFixed(1)}% | R:R trung bình: ${tradeStats.historicalRR.toFixed(2)} | Tổng số lệnh đã đóng: ${tradeStats.totalClosed}
 
-      const masterPrompt = `Hệ thống ANTI-FRAGILE V5.5.0 Master Controller. Vai trò: Giám đốc Rủi ro tối cao (CRO Audit Engine).
-Dưới đây là biên bản tổng hợp từ Hội đồng 5 Nhà Phân tích Kỹ thuật độc lập (Gemini 3.1 Flash-Lite):
-${combinedReportsText}
-
---- THÔNG SỐ LỆNH HIỆN TẠI ---
-- Cặp tiền: ${symbol} | Khung: ${intervalTime}
-- Lệnh: ${tradeSetup.tradeType} ${tradeSetup.direction} | Entry: $${tradeSetup.entry} | SL: $${tradeSetup.slTech} | TP: $${tradeSetup.tp1}
-- Định lượng: Cửa Gates = ${logicGates.isApproved ? "ĐẠT" : "THẤT BẠI"} | Điểm Soft Gate = ${logicGates.softScore}/10.0 | True EV = ${mathCore.trueEVValue}R | R:R Ròng = 1:${mathCore.theoreticalRR}
-- Vector Trạng thái: [${vectorRegime.vector.join(', ')}]
-
---- DỮ LIỆU LỊCH SỬ GIAO DỊCH (HỒ SƠ BAYESIAN CỦA TRADER) ---
-- Tổng số lệnh đã đóng: ${tradeStats.totalClosed} | Winrate hiện tại: ${(tradeStats.winRate * 100).toFixed(1)}% | Lịch sử R:R: ${tradeStats.historicalRR.toFixed(2)}
-- 5 lệnh đóng gần nhất: 
-${recentTrades.length > 0 ? recentTrades.join('\n') : "Chưa đủ dữ liệu để đánh giá thói quen."}
-
-Nhiệm vụ kiểm toán của bạn:
-1. Đưa ra phán quyết tối thượng ở ngay câu đầu tiên: Bắt buộc ghi rõ chữ "DUYỆT" hoặc "ĐỨNG NGOÀI" viết hoa. Chú ý: Nếu Cửa Gates báo THẤT BẠI, bạn PHẢI phân tích lý do tại sao lệnh này nguy hiểm.
-2. Đối chiếu setup hiện tại với lịch sử giao dịch. Nếu Trader đang có chuỗi thua (LOSS liên tiếp) hoặc Winrate quá thấp (<40%), hãy cảnh báo gay gắt, phân tích sai lầm về mặt tâm lý và yêu cầu giảm volume (Half-Kelly).
-3. Cung cấp một cái nhìn tổng quan về cấu trúc thị trường toàn diện và chỉ ra phân kỳ ngầm hoặc điểm synergy cốt lõi nhất để đánh giá lệnh này.`;
+BẤT DI BẤT DỊCH:
+1. Bạn phải mở đầu bằng chữ "PHÁN QUYẾT: DUYỆT" hoặc "PHÁN QUYẾT: ĐỨNG NGOÀI" (In hoa).
+2. Viết ngắn gọn, súc tích (Dưới 200 chữ).
+3. Nếu Winrate < 40% hoặc lệnh bị BLOCK bởi Logic Gates, hãy chỉ trích trực tiếp vào tính kỷ luật của trader.
+4. Chỉ ra "Điểm Hợp Lưu (Synergy)" mạnh nhất, hoặc "Phân kỳ ngầm" độc hại nhất của setup này.`;
 
       const finalRes = await fetch(`/api/gemini`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: "gemini-3.5-flash",
-          input: masterPrompt,
-          generation_config: { thinking_level: "medium" }
-        })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: "gemini-3.5-flash", input: masterPrompt, generation_config: { thinking_level: "medium" } })
       });
 
-      if (!finalRes.ok) throw new Error(finalRes.status === 429 ? 'RATE_LIMIT' : 'API_ERROR');
       const finalData = await finalRes.json();
-      const outputStep = finalData.steps?.find(step => step.type === 'model_output');
-      
-      setAiAnalysis(outputStep?.content?.[0]?.text || 'Lỗi trích xuất phán quyết Giám đốc.');
+      setAiAnalysis(finalData.steps?.find(step => step.type === 'model_output')?.content?.[0]?.text || 'Lỗi trích xuất phán quyết.');
       setGeminiCooldown(15); 
     } catch (error) {
-      setAiAnalysis(error.message === 'RATE_LIMIT' ? '❌ 429 Limit: Quá tải API hội đồng.' : '❌ Lỗi kết nối AI Serverless.');
-      setGeminiCooldown(30); 
+      setAiAnalysis('❌ Lỗi kết nối AI Serverless.'); setGeminiCooldown(30); 
     }
     setIsAnalyzing(false);
   };
@@ -432,6 +406,14 @@ Nhiệm vụ kiểm toán của bạn:
   const handleSaveTradeLog = async () => {
     if (!supabase) return;
     try {
+      // Đổ TOÀN BỘ dữ liệu vào DB (Để dùng cho ML Dataset sau này)
+      const fullSystemContext = {
+         vector_details: vectorRegime.details,
+         auto_data: autoData,
+         math_core: mathCore,
+         api_macro: apiMacro
+      };
+
       const payload = {
         symbol, interval: intervalTime, type: tradeSetup.tradeType, direction: tradeSetup.direction,
         entry: parseFloat(tradeSetup.entry), sl: parseFloat(tradeSetup.slTech), tp_1_price: parseFloat(tradeSetup.tp1), tp_2_price: null, 
@@ -439,17 +421,19 @@ Nhiệm vụ kiểm toán của bạn:
         adx: parseFloat(autoData.adx), atr: parseFloat(autoData.atr14), funding_rate: parseFloat(autoData.fundingRate),
         oi_spiking: autoData.isOiSpiking, fgi: parseFloat(apiMacro.fgiValue),
         trend_sma200: autoData.currentPrice > autoData.htfSma200 ? 'UP' : 'DOWN', leverage: parseFloat(mathCore.suggestedLeverage), 
-        status: 'PENDING', // [SỬA ĐỔI]: Đặt trạng thái ban đầu là PENDING (Chờ khớp Binance)
+        status: 'PENDING', // BƯỚC 1: PENDING (Chờ khớp lệnh thật)
         pnl_usd: 0, session: apiMacro.tradingSession, market_regime: vectorRegime.vector.join(' | '), bbw_rank: parseFloat(autoData.bbwRank), 
         cmf: parseFloat(autoData.cmf), ai_advice: aiAnalysis ? aiAnalysis.substring(0, 3000) : null, mvrv: parseFloat(mvrvZScore), 
         oi_delta: parseFloat(autoData.oiDelta || 0), taker_ratio: parseFloat(apiMacro.takerBuySellRatio || 1), 
         funding_slope: parseFloat(autoData.fundingSlope || 0), soft_score: parseFloat(logicGates.softScore), 
-        holding_cycles: 1, applied_risk_pct: parseFloat(tradeSetup.riskPercent) 
+        holding_cycles: 1, applied_risk_pct: parseFloat(tradeSetup.riskPercent),
+        // Nếu DB của bạn có cột meta_data (JSONB), Supabase sẽ tự lưu. Nếu không có, nó bỏ qua mà không sập code.
+        meta_data: fullSystemContext 
       };
       
       const { error } = await supabase.from('trade_logs').insert([payload]);
       if (error) throw error;
-      showToast("☁️ Đã lưu VECTOR. Lệnh đang ở trạng thái [PENDING]. Vui lòng đặt lệnh trên Binance!");
+      showToast("☁️ ĐÃ LƯU VECTOR. Lệnh đang ở trạng thái [CHỜ KHỚP]. Hãy đặt lệnh thật trên Binance!");
     } catch (e) { showToast(`❌ Lỗi Supabase: ${e.message}`); }
   };
 
@@ -458,12 +442,11 @@ Nhiệm vụ kiểm toán của bạn:
     setIsSyncing(true);
     
     try {
-      // [SỬA ĐỔI]: Quét TOÀN BỘ lệnh đang PENDING hoặc OPEN, KHÔNG chặn theo symbol hiện tại nữa!
+      // Lấy TẤT CẢ lệnh chưa đóng trên DB BẤT KỂ LÀ ĐỒNG COIN NÀO
       const activeLogs = tradeLogs.filter(log => log.status === 'OPEN' || log.status === 'PENDING');
       if (activeLogs.length === 0) {
-        showToast("✅ Không có lệnh OPEN/PENDING nào trên DB cần đồng bộ.");
-        setIsSyncing(false);
-        return;
+        showToast("✅ Sổ tay không có lệnh OPEN/PENDING nào cần đồng bộ.");
+        setIsSyncing(false); return;
       }
 
       for (const log of activeLogs) {
@@ -471,75 +454,47 @@ Nhiệm vụ kiểm toán của bạn:
         const currentPosition = binancePositions.find(p => p.symbol === log.symbol);
         const positionAmt = currentPosition ? parseFloat(currentPosition.positionAmt) : 0;
 
-        // PHASE 1: Lệnh đang chờ khớp (PENDING)
+        // PHASE 1: Lệnh đang chờ khớp (PENDING) -> Nhận diện có lệnh thật -> OPEN
         if (log.status === 'PENDING') {
            if (positionAmt !== 0) {
-              // Nếu trên Binance có position thật, ta Update nó thành OPEN và lấy ENTRY THẬT
               const realEntry = parseFloat(currentPosition.entryPrice);
-              await supabase.from('trade_logs').update({ 
-                  status: 'OPEN',
-                  entry: realEntry 
-              }).eq('id', log.id);
-              showToast(`🔗 Đã liên kết thành công lệnh ${log.symbol} trên Binance vào DB!`);
+              await supabase.from('trade_logs').update({ status: 'OPEN', entry: realEntry }).eq('id', log.id);
+              showToast(`🔗 Đã liên kết lệnh ${log.symbol} trên Binance vào Sổ tay!`);
            }
         } 
-        // PHASE 2: Lệnh đang chạy (OPEN)
+        // PHASE 2: Lệnh đang chạy (OPEN) -> Quản lý chốt lời/cắt lỗ hoặc MFE/MAE
         else if (log.status === 'OPEN') {
-           if (positionAmt === 0) {
-              // Lệnh mất khỏi Binance -> Đã đóng/Cắn SL/TP
+           if (positionAmt === 0) { // Không còn vị thế -> Lệnh đã đóng
               let exitPrice = autoData?.currentPrice;
-              // Nếu đang check một coin khác symbol đang mở, ta dùng public API lấy giá trị cuối
-              if (log.symbol !== symbol) {
-                  try {
-                     const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${log.symbol}`);
-                     const data = await res.json();
-                     if (data.price) exitPrice = parseFloat(data.price);
-                  } catch(e) {}
+              if (log.symbol !== symbol) { // Lấy giá chốt thật nếu coin đó đang không hiển thị trên màn hình
+                  try { const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${log.symbol}`); const data = await res.json(); if (data.price) exitPrice = parseFloat(data.price); } catch(e) {}
               }
               if (!exitPrice) exitPrice = parseFloat(log.entry);
 
               const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
               const priceDiff = exitPrice - parseFloat(log.entry);
               const finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
-              const exitReason = finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS';
 
-              const { error } = await supabase.from('trade_logs').update({ 
-                  status: finalPnl > 0 ? 'WIN' : 'LOSS', 
-                  pnl_usd: finalPnl, 
-                  close_price: exitPrice,
-                  exit_reason: exitReason,
-                  close_time: new Date().toISOString()
+              await supabase.from('trade_logs').update({ 
+                  status: finalPnl > 0 ? 'WIN' : 'LOSS', pnl_usd: finalPnl, close_price: exitPrice,
+                  exit_reason: finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS', close_time: new Date().toISOString()
               }).eq('id', log.id);
-              
-              if (!error) showToast(`🔄 Đã đồng bộ đóng lệnh ${log.symbol}! (PnL: ${finalPnl.toFixed(2)}$)`);
-           } 
-           // Đang có vị thế chạy -> Lấy MFE / MAE và PnL thật
-           else if (positionAmt !== 0) {
+              showToast(`🔄 Đã đóng lệnh ${log.symbol}! (PnL: ${finalPnl.toFixed(2)}$)`);
+           } else { // Vẫn đang mở -> Update Tracking cực trị
               const livePnl = parseFloat(currentPosition.unRealizedProfit);
-              let newMfe = log.max_favorable_excursion_usd || 0;
-              let newMae = log.max_adverse_excursion_usd || 0;
+              let newMfe = log.max_favorable_excursion_usd || 0; let newMae = log.max_adverse_excursion_usd || 0;
               let requiresUpdate = false;
-
               if (livePnl > newMfe) { newMfe = livePnl; requiresUpdate = true; }
               if (livePnl < newMae) { newMae = livePnl; requiresUpdate = true; }
-
-              if (requiresUpdate) {
-                  await supabase.from('trade_logs').update({ 
-                    max_favorable_excursion_usd: newMfe,
-                    max_adverse_excursion_usd: newMae
-                  }).eq('id', log.id);
-              }
+              if (requiresUpdate) await supabase.from('trade_logs').update({ max_favorable_excursion_usd: newMfe, max_adverse_excursion_usd: newMae }).eq('id', log.id);
            }
         }
       }
-    } catch (e) {
-      showToast(`❌ Lỗi đồng bộ: ${e.message}`);
-    } finally {
-      setIsSyncing(false);
-    }
+    } catch (e) { showToast(`❌ Lỗi đồng bộ: ${e.message}`); } 
+    finally { setIsSyncing(false); }
   };
 
-  const handleMasterAuto = () => {
+  const handleMasterAuto = () => { 
     if (!autoData || !vectorRegime) return;
     let dir = vectorRegime.details.l1 === 'Trend Up' ? 'LONG' : 'SHORT'; 
     let slMult = 1.5, tpMult = 2.0; let execType = 'LIMIT'; let suggestedEntry = autoData.currentPrice;

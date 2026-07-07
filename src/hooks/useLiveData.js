@@ -147,7 +147,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs }) {
           safeFetch(`/api/binance?path=/futures/data/globalLongShortAccountRatio&symbol=${symbol}&period=${intervalTime}&limit=1&t=${ts}`),
           safeFetch(`/api/binance?path=/futures/data/topLongShortPositionRatio&symbol=${symbol}&period=${intervalTime}&limit=1&t=${ts}`),
           safeFetch(`/api/binance?path=/futures/data/takerlongshortRatio&symbol=${symbol}&period=${intervalTime}&limit=1&t=${ts}`),
-          safeFetch(`/api/binance?path=/fapi/v2/positionRisk&symbol=${symbol}&isPrivate=true&t=${ts}`),
+          safeFetch(`/api/binance?path=/fapi/v2/positionRisk&isPrivate=true&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v2/account&isPrivate=true&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=BTCDOMUSDT&interval=${mtfInterval}&limit=25&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/ticker/bookTicker&symbol=${symbol}&t=${ts}`),
