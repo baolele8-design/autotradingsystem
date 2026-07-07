@@ -122,6 +122,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs }) {
     const fetchData = async () => {
       setLoading(true);
       try {
+        setSystemError(false);
         let mtfInterval = '1h';
         if (intervalTime === '15m') mtfInterval = '1h';
         else if (intervalTime === '1h') mtfInterval = '4h';

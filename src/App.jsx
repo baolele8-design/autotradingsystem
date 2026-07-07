@@ -408,7 +408,7 @@ BẤT DI BẤT DỊCH:
 
       const finalRes = await fetch(`/api/gemini`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: "gemini-3.5-flash", input: masterPrompt, generation_config: { thinking_level: "medium" } })
+        body: JSON.stringify({ model: "gemini-3.1-flash-lite", input: masterPrompt, generation_config: { thinking_level: "medium" } })
       });
 
       const finalData = await finalRes.json();
