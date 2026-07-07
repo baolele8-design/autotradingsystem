@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 07, 2026, 10:27 PM ---
+--- START OF FILE Paste Jul 07, 2026, 10:56 PM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -6,7 +6,7 @@
 
 // FILE: src/App.jsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { BrainCircuit, Activity, Loader2, ServerCrash, Bell } from 'lucide-react';
+import { BrainCircuit, Activity, Loader2, ServerCrash, Bell, Server } from 'lucide-react';
 
 import QuantMath from './core/QuantMath';
 import { supabase } from './services/supabase';
@@ -43,22 +43,25 @@ export default function AntiFragileTerminal() {
   const [geminiCooldown, setGeminiCooldown] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // TÍCH HỢP STATE GIÁM SÁT RATE LIMIT VÀ ĐỘ TRỄ VERCEL
+  const [systemHealth, setSystemHealth] = useState({ weight: 0, maxWeight: 2400, latency: 0 });
+
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
-  // THÊM TRUY XUẤT STEPSIZE / TICKSIZE
   const { dynamicMinNotionals, dynamicPool, stepSizes, tickSizes } = useExchangeConfig();
 
+  // Truyền setSystemHealth vào các Hook gọi API
   const {
     loading, lastUpdated, systemError, liveCapital,
     binancePositions, leverageBrackets, tradeFees,
     autoData, cmcData, apiMacro
-  } = useLiveData({ symbol, intervalTime, indicatorSpecs });
+  } = useLiveData({ symbol, intervalTime, indicatorSpecs, setSystemHealth });
 
   const { 
     scannedTopSetups, isScanningBackground, sonarEnabled, setSonarEnabled 
   } = useMatrixScanner({ 
     liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast,
-    dynamicPool, dynamicMinNotionals
+    dynamicPool, dynamicMinNotionals, setSystemHealth
   });
 
   useEffect(() => {
@@ -553,18 +556,26 @@ BẤT DI BẤT DỊCH:
           </p>
         </div>
         
-        <div className="flex items-center gap-2 bg-slate-900/50 p-1.5 rounded border border-slate-800">
-          <select className="bg-black text-emerald-400 font-bold px-3 py-1.5 rounded border border-slate-700/50 outline-none text-sm cursor-pointer" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-            {dynamicPool.map(sym => (
-              <option key={sym} value={sym}>{sym.replace('USDT', '/USDT')}</option>
-            ))}
-          </select>
-          <select className="bg-black text-blue-400 font-bold px-3 py-1.5 rounded border border-slate-700/50 outline-none text-sm cursor-pointer" value={intervalTime} onChange={(e) => setIntervalTime(e.target.value)}>
-            <option value="5m">M5 (Scalp)</option><option value="15m">M15 (Day)</option><option value="1h">H1 (Swing)</option>
-            <option value="4h">H4 (Macro)</option><option value="1d">D1 (Trend)</option><option value="1w">W1 (Investment)</option>
-          </select>
-          <div className="px-3 border-l border-slate-700/50">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin text-slate-500"/> : <Activity className="w-4 h-4 text-emerald-500"/>}
+        <div className="flex items-center gap-3">
+          {/* TRACKER GIAO DIỆN HỆ THỐNG */}
+          <div className={`px-2 py-1 rounded text-[9px] font-bold border flex flex-col items-center ${systemHealth.weight > 2000 ? 'bg-red-950/50 text-red-400 border-red-900 animate-pulse' : systemHealth.weight > 1200 ? 'bg-amber-950/50 text-amber-400 border-amber-900' : 'bg-slate-900/50 text-emerald-400 border-slate-700'}`}>
+              <span>API LIMIT: {systemHealth.weight}/{systemHealth.maxWeight}</span>
+              <span className={`text-[7px] ${systemHealth.latency > 3000 ? 'text-red-500 animate-pulse' : 'text-slate-500'}`}>VERCEL RTT: {systemHealth.latency}ms</span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-900/50 p-1.5 rounded border border-slate-800">
+            <select className="bg-black text-emerald-400 font-bold px-3 py-1.5 rounded border border-slate-700/50 outline-none text-sm cursor-pointer" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+              {dynamicPool.map(sym => (
+                <option key={sym} value={sym}>{sym.replace('USDT', '/USDT')}</option>
+              ))}
+            </select>
+            <select className="bg-black text-blue-400 font-bold px-3 py-1.5 rounded border border-slate-700/50 outline-none text-sm cursor-pointer" value={intervalTime} onChange={(e) => setIntervalTime(e.target.value)}>
+              <option value="5m">M5 (Scalp)</option><option value="15m">M15 (Day)</option><option value="1h">H1 (Swing)</option>
+              <option value="4h">H4 (Macro)</option><option value="1d">D1 (Trend)</option><option value="1w">W1 (Investment)</option>
+            </select>
+            <div className="px-3 border-l border-slate-700/50">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin text-slate-500"/> : <Activity className="w-4 h-4 text-emerald-500"/>}
+            </div>
           </div>
         </div>
       </div>
@@ -581,7 +592,6 @@ BẤT DI BẤT DỊCH:
         <div className="lg:col-span-7 space-y-6">
           <LiveMetrics autoData={autoData} apiMacro={apiMacro} cmcData={cmcData} indicatorSpecs={indicatorSpecs} mvrvZScore={mvrvZScore} setMvrvZScore={setMvrvZScore} />
           <VectorState vectorRegime={vectorRegime} mvrvZScore={mvrvZScore} autoData={autoData} />
-          {/* TRUYỀN TICKSIZE VÀ STEPSIZE XUỐNG ORDER FORM */}
           <OrderForm 
             autoData={autoData} tradeSetup={tradeSetup} setTradeSetup={setTradeSetup} 
             liveCapital={liveCapital} mathCore={mathCore} tradeStats={tradeStats} 
@@ -999,26 +1009,115 @@ export default function LogicGates({
 /// FILE: src\components\terminal\OrderForm.jsx
 =========================================
 
-import React from 'react';
-import { Zap, TrendingUp, TrendingDown, BarChart3, Lock } from 'lucide-react';
+import React, { useState } from 'react';
+import { Zap, TrendingUp, TrendingDown, BarChart3, Lock, Rocket, Loader2 } from 'lucide-react';
 
 export default function OrderForm({
-  autoData,
-  tradeSetup,
-  setTradeSetup,
-  liveCapital,
-  mathCore,
-  tradeStats,
-  symbol,
-  handleMasterAuto
+  autoData, tradeSetup, setTradeSetup, liveCapital, mathCore, tradeStats,
+  symbol, handleMasterAuto, stepSizes, tickSizes
 }) {
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [execStatus, setExecStatus] = useState('');
+
+  const handleExecuteBatch = async () => {
+    if (mathCore.hasMinNotionalError || tradeSetup.entry <= 0 || tradeSetup.slTech <= 0) {
+        setExecStatus('❌ LỖI SETUP: Check lại Min Notional hoặc Entry/SL');
+        return;
+    }
+
+    setIsExecuting(true);
+    setExecStatus('Đang phóng cụm lệnh lên sàn...');
+
+    try {
+        const step = stepSizes[symbol] || 0.001;
+        const tick = tickSizes[symbol] || 0.001;
+
+        // Hàm giúp định dạng số chống lỗi 400 PRICE_FILTER và LOT_SIZE của Binance
+        const formatPrecision = (val, size) => {
+            const precision = size.toString().includes('.') ? size.toString().split('.')[1].length : 0;
+            return parseFloat(val).toFixed(precision);
+        };
+
+        const rawQty = parseFloat(mathCore.positionSizeUSD) / tradeSetup.entry;
+        const finalQty = formatPrecision(rawQty, step);
+        const finalEntry = formatPrecision(tradeSetup.entry, tick);
+        const finalSl = formatPrecision(tradeSetup.slTech, tick);
+        const finalTp = formatPrecision(tradeSetup.tp1, tick);
+
+        if (tradeSetup.tradeType === 'FUTURES') {
+            const batch = [];
+            const side = tradeSetup.direction === 'LONG' ? 'BUY' : 'SELL';
+            const exitSide = tradeSetup.direction === 'LONG' ? 'SELL' : 'BUY';
+
+            // 1. Lệnh Entry (Market không gửi price)
+            batch.push({
+                symbol: symbol,
+                side: side,
+                type: tradeSetup.execution,
+                quantity: finalQty,
+                ...(tradeSetup.execution === 'LIMIT' ? { price: finalEntry, timeInForce: 'GTC' } : {})
+            });
+
+            // 2. Lệnh Stoploss Cứng
+            if (parseFloat(finalSl) > 0) {
+                batch.push({
+                    symbol: symbol, side: exitSide, type: 'STOP_MARKET',
+                    stopPrice: finalSl, closePosition: "true", timeInForce: 'GTE_GTC'
+                });
+            }
+
+            // 3. Lệnh Take Profit
+            if (parseFloat(finalTp) > 0) {
+                batch.push({
+                    symbol: symbol, side: exitSide, type: 'TAKE_PROFIT_MARKET',
+                    stopPrice: finalTp, closePosition: "true", timeInForce: 'GTE_GTC'
+                });
+            }
+
+            // Gọi qua Vercel API của bạn
+            const res = await fetch('/api/binance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ batchOrders: batch })
+            });
+            const data = await res.json();
+            
+            if (!res.ok) throw new Error(data.details?.msg || data.error || 'Binance Rejected');
+            setExecStatus('✅ ĐÃ KHỚP CỤM LỆNH LIÊN HOÀN!');
+            setTimeout(() => setExecStatus(''), 5000);
+        } else {
+            setExecStatus('❌ Cụm lệnh hiện chỉ hỗ trợ Futures.');
+        }
+    } catch (err) {
+        setExecStatus('❌ LỖI BINANCE: ' + err.message);
+    }
+    setIsExecuting(false);
+  };
+
   return (
     <div className="bg-[#111116] border border-slate-800 rounded-xl p-4 shadow-xl">
       <div className="flex items-center justify-between mb-4 border-b border-slate-800/80 pb-3">
         <button onClick={handleMasterAuto} disabled={!autoData} className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/30 px-3 py-1.5 rounded text-[10px] font-bold flex items-center gap-2">
           <Zap className="w-3 h-3" /> AUTO SYNC TEMPLATE
         </button>
+
+        {/* NÚT BẮN CỤM LỆNH LIÊN HOÀN */}
+        <button 
+          onClick={handleExecuteBatch} 
+          disabled={isExecuting || !autoData} 
+          className={`px-4 py-1.5 rounded text-[10px] font-black flex items-center gap-2 transition-all shadow-lg
+            ${isExecuting ? 'bg-slate-800 text-slate-500' : 'bg-emerald-600 text-black hover:bg-emerald-500 border border-emerald-400'}`}
+        >
+          {isExecuting ? <Loader2 className="w-3 h-3 animate-spin"/> : <Rocket className="w-3 h-3" />} 
+          PHÓNG CỤM LỆNH BINANCE
+        </button>
       </div>
+
+      {execStatus && (
+          <div className={`mb-3 text-[10px] font-bold p-2 rounded border ${execStatus.includes('✅') ? 'bg-emerald-950/30 text-emerald-400 border-emerald-900' : 'bg-red-950/30 text-red-400 border-red-900'} animate-pulse`}>
+              {execStatus}
+          </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="space-y-3">
@@ -1039,7 +1138,7 @@ export default function OrderForm({
                     <div className="text-emerald-400 font-bold text-sm">${liveCapital.toFixed(2)}</div>
                   </div>
                   <div className="w-1/2 pl-2">
-                    <label className="text-[8px] font-bold text-slate-400 block mb-1">MAX RISK: {tradeSetup.riskPercent}%</label>
+                    <label className="text-[8px] font-bold text-slate-400 block mb-1">BASE RISK: {tradeSetup.riskPercent}%</label>
                     <input type="number" step="0.1" max="5" value={tradeSetup.riskPercent} onChange={e=>setTradeSetup({...tradeSetup, riskPercent: Number(e.target.value)})} className="w-full bg-transparent text-emerald-400 font-bold outline-none text-sm"/>
                   </div>
                 </div>
@@ -1076,14 +1175,18 @@ export default function OrderForm({
               <div className="text-[8px] text-red-500 font-bold text-right -mt-2">⚠️ LỖI: SIZE BỊ ÉP VƯỢT RỦI RO SINH TỒN ({'>'} 5% VỐN)</div>
             )}
             
-            {/* Cảnh báo Min Notional mới lấy trực tiếp thông qua logic toán học */}
             {!mathCore.hasMinNotionalError && mathCore.isSizeForcedByExchange && (
               <div className="text-[8px] text-amber-500 font-bold text-right -mt-2">⚠️ CẢNH BÁO: SIZE ĐÃ BỊ ÉP LÊN MỨC TỐI THIỂU CỦA SÀN KỲ HẠN</div>
             )}
 
             <div className="flex justify-between items-end border-b border-slate-800 pb-1.5">
               <span className="text-[10px] font-bold text-slate-500">Mất ròng tối đa (Risk):</span>
-              <span className={`font-black text-sm ${mathCore.isSizeForcedByExchange ? 'text-amber-500' : 'text-red-400'}`}>${mathCore?.riskAmountUSD || '0.00'}</span>
+              <span className={`font-black text-sm ${mathCore.isSizeForcedByExchange ? 'text-amber-500' : 'text-red-400'}`}>
+                ${mathCore?.riskAmountUSD || '0.00'}
+                <span className="text-[8.5px] ml-1.5 text-purple-400 font-normal border border-purple-500/30 bg-purple-900/20 px-1 rounded">
+                  APPLIED: {mathCore.appliedRiskPercent}%
+                </span>
+              </span>
             </div>
             <div className="flex justify-between items-end border-b border-slate-800 pb-1.5">
               <span className="text-[10px] font-bold text-slate-500 flex flex-col">
@@ -1107,11 +1210,6 @@ export default function OrderForm({
                  <span className={`px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/10 text-amber-400 border border-amber-500/20`}>
                    {tradeSetup.tradeType === 'SPOT' ? '1x' : `Min ${mathCore?.suggestedLeverage || '1'}x`}
                  </span>
-                 {mathCore?.leverageExceedsExchangeCap && (
-                   <div className="text-[7.5px] text-red-500 mt-1 font-bold animate-pulse text-right w-full">
-                     ⚠️ BỊ ÉP TRẦN {mathCore?.liqEstimate?.maxLevForTier}X
-                   </div>
-                 )}
               </div>
             </div>
           </div>
@@ -1722,7 +1820,7 @@ export default function useExchangeConfig() {
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 
-export default function useLiveData({ symbol, intervalTime, indicatorSpecs }) {
+export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setSystemHealth }) {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [systemError, setSystemError] = useState(false);
@@ -1832,26 +1930,34 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs }) {
         else if (intervalTime === '4h') mtfInterval = '1d';
         else if (intervalTime === '1d') mtfInterval = '1w';
 
-        // CHỐNG LỖI 400: API Tỷ lệ (Ratio) của Binance Futures KHÔNG hỗ trợ 1w
         let macroInterval = intervalTime;
-        if (intervalTime === '1w') macroInterval = '1d';
+        if (intervalTime === '1w') macroInterval = '1d'; 
 
         const ts = Date.now(); 
+        
+        // TÍCH HỢP ĐO LƯỜNG LATENCY VÀ WEIGHT VÀO SAFEFETCH
         const safeFetch = async (url) => {
           try {
+            const startPing = Date.now();
             const res = await fetch(url, { signal: controller.signal });
+            const latency = Date.now() - startPing;
+            
+            const weight = res.headers.get('x-mbx-used-weight-1m');
+            if (weight && setSystemHealth && isMounted) {
+               setSystemHealth(prev => ({ ...prev, weight: parseInt(weight, 10), latency }));
+            }
+
             if (!res.ok) return null;
             return await res.json();
           } catch (e) { return null; }
         };
 
         const requests = [
-          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=${intervalTime}&limit=250&t=${ts}`),
-          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=${mtfInterval}&limit=250&t=${ts}`),
-          safeFetch(`/api/binance?path=/api/v3/klines&symbol=${symbol}&interval=1d&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=${intervalTime}&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=${mtfInterval}&limit=250&t=${ts}`),
+          safeFetch(`/api/binance?path=/fapi/v1/klines&symbol=${symbol}&interval=1d&limit=250&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/fundingRate&symbol=${symbol}&limit=10&t=${ts}`),
           safeFetch(`/api/binance?path=/fapi/v1/openInterest&symbol=${symbol}&t=${ts}`),
-          // Thay intervalTime bằng macroInterval
           safeFetch(`/api/binance?path=/futures/data/openInterestHist&symbol=${symbol}&period=${macroInterval}&limit=30&t=${ts}`),
           safeFetch(`/api/binance?path=/futures/data/globalLongShortAccountRatio&symbol=${symbol}&period=${macroInterval}&limit=1&t=${ts}`),
           safeFetch(`/api/binance?path=/futures/data/topLongShortPositionRatio&symbol=${symbol}&period=${macroInterval}&limit=1&t=${ts}`),
@@ -2025,7 +2131,7 @@ import { POOL_INTERVALS } from '../config/constants';
 
 export default function useMatrixScanner({ 
   liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast, 
-  dynamicPool, dynamicMinNotionals 
+  dynamicPool, dynamicMinNotionals, setSystemHealth 
 }) {
   const [scannedTopSetups, setScannedTopSetups] = useState([]);
   const [isScanningBackground, setIsScanningBackground] = useState(false);
@@ -2052,12 +2158,21 @@ export default function useMatrixScanner({
   useEffect(() => {
     let isMounted = true;
 
+    // TÍCH HỢP THEO DÕI RATE LIMIT TRONG SCANNER
     const fetchWithTimeout = async (url, ms = 8000) => {
         const controller = new AbortController();
         const id = setTimeout(() => controller.abort(), ms);
         try {
+            const startPing = Date.now();
             const response = await fetch(url, { signal: controller.signal });
             clearTimeout(id);
+            const latency = Date.now() - startPing;
+            
+            const weight = response.headers.get('x-mbx-used-weight-1m');
+            if (weight && setSystemHealth && isMounted) {
+               setSystemHealth(prev => ({ ...prev, weight: parseInt(weight, 10), latency }));
+            }
+            
             return response.ok ? await response.json() : [];
         } catch (error) {
             clearTimeout(id);
@@ -2079,7 +2194,7 @@ export default function useMatrixScanner({
         
         try {
             const [allBook, allPrem] = await Promise.all([
-                fetchWithTimeout(`/api/binance?path=/api/v3/ticker/bookTicker&t=${ts}`, 10000),
+                fetchWithTimeout(`/api/binance?path=/fapi/v1/ticker/bookTicker&t=${ts}`, 10000),
                 fetchWithTimeout(`/api/binance?path=/fapi/v1/premiumIndex&t=${ts}`, 10000)
             ]);
 
@@ -2114,7 +2229,7 @@ export default function useMatrixScanner({
           }
         }
 
-        const chunkSize = 9; 
+        const chunkSize = 6; 
         const results = [];
 
         for (let i = 0; i < fetchTasks.length; i += chunkSize) {
@@ -2127,15 +2242,14 @@ export default function useMatrixScanner({
             else if (task.interval === '4h') mtfInterval = '1d';
             else if (task.interval === '1d') mtfInterval = '1w';
 
-            // Cập nhật macroInterval để chống lỗi 400
             let macroInterval = task.interval;
             if (task.interval === '1w') macroInterval = '1d';
 
             return Promise.all([
-              fetchWithTimeout(`/api/binance?path=/api/v3/klines&symbol=${task.symbol}&interval=${task.interval}&limit=250&t=${ts}`),
+              fetchWithTimeout(`/api/binance?path=/fapi/v1/klines&symbol=${task.symbol}&interval=${task.interval}&limit=250&t=${ts}`),
               fetchWithTimeout(`/api/binance?path=/futures/data/takerlongshortRatio&symbol=${task.symbol}&period=${macroInterval}&limit=1&t=${ts}`),
               fetchWithTimeout(`/api/binance?path=/futures/data/globalLongShortAccountRatio&symbol=${task.symbol}&period=${macroInterval}&limit=1&t=${ts}`),
-              fetchWithTimeout(`/api/binance?path=/api/v3/klines&symbol=${task.symbol}&interval=${mtfInterval}&limit=250&t=${ts}`)
+              fetchWithTimeout(`/api/binance?path=/fapi/v1/klines&symbol=${task.symbol}&interval=${mtfInterval}&limit=250&t=${ts}`)
             ]).then(([klines, takerData, lsData, klinesMTF]) => ({
               ...task,
               klines,
@@ -2149,7 +2263,7 @@ export default function useMatrixScanner({
           results.push(...chunkResults);
           
           if (i + chunkSize < fetchTasks.length) {
-            await new Promise(resolve => setTimeout(resolve, 300)); 
+            await new Promise(resolve => setTimeout(resolve, 500)); 
           }
         }
 
@@ -2341,6 +2455,7 @@ export default function useMatrixScanner({
                                (dir === 'SHORT' && currentMvrv > 2.5 && checkS3) ||
                                (l2 === 'Compression' && bbwSlopeLocal > 10);
 
+            const currentOiValue = parseFloat(result.value.klines[result.value.klines.length - 1][7] || 0); 
             const hasNanoCapSynergy = 
                 simulatedRR >= 2.5 && 
                 (l2 === 'Compression' || localSfpLong || localSfpShort || localVolSpike || (dir === 'LONG' && localObi > 0.7) || (dir === 'SHORT' && localObi < 0.3));
@@ -2396,9 +2511,7 @@ export default function useMatrixScanner({
               cmf: cmf.toFixed(2),
               overrideTag 
             });
-          } catch (innerErr) {
-             continue;
-          }
+          } catch (innerErr) { continue; }
         }
 
         scanResultsPool.sort((a, b) => parseFloat(b.theoreticalRR) - parseFloat(a.theoreticalRR));
@@ -2521,6 +2634,7 @@ export const supabase = (supabaseUrl && supabaseKey)
 /// FILE: api\binance.js
 =========================================
 
+// FILE: api/binance.js
 import crypto from 'crypto';
 
 export default async function handler(req, res) {
@@ -2554,6 +2668,13 @@ export default async function handler(req, res) {
             'Content-Type': 'application/x-www-form-urlencoded'
           }
         });
+
+        // Bóc tách Header Rate Limit của Binance
+        const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
+        if (weight1m) {
+            res.setHeader('x-mbx-used-weight-1m', weight1m);
+            res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
+        }
 
         const textRaw = await binanceRes.text();
         let data;
@@ -2591,6 +2712,13 @@ export default async function handler(req, res) {
           'Content-Type': 'application/json'
         }
       });
+
+      // Bóc tách Header Rate Limit
+      const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
+      if (weight1m) {
+          res.setHeader('x-mbx-used-weight-1m', weight1m);
+          res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
+      }
 
       const textRaw = await binanceRes.text();
       let data;
@@ -2641,6 +2769,13 @@ export default async function handler(req, res) {
       
       const binanceRes = await fetch(targetUrl, { headers });
       
+      // Bóc tách Header Rate Limit của Binance
+      const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
+      if (weight1m) {
+          res.setHeader('x-mbx-used-weight-1m', weight1m);
+          res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
+      }
+
       const textRaw = await binanceRes.text();
       let data;
       try {
