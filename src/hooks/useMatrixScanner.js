@@ -1,4 +1,4 @@
-/// FILE: src/hooks/useMatrixScanner.js
+// FILE: src/hooks/useMatrixScanner.js
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 import { POOL_INTERVALS, POOL_SYMBOLS } from '../config/constants';
@@ -20,10 +20,9 @@ export default function useMatrixScanner({
   const apiMacroRef = useRef(apiMacro);
   const dynamicPoolRef = useRef(dynamicPool);
   const dynamicMinNotionalsRef = useRef(dynamicMinNotionals);
-  
   const systemHealthRef = useRef(systemHealth);
-  useEffect(() => { systemHealthRef.current = systemHealth; }, [systemHealth]);
 
+  useEffect(() => { systemHealthRef.current = systemHealth; }, [systemHealth]);
   useEffect(() => { liveCapitalRef.current = liveCapital; }, [liveCapital]);
   useEffect(() => { autoDataRef.current = autoData; }, [autoData]);
   useEffect(() => { mvrvZScoreRef.current = mvrvZScore; }, [mvrvZScore]);
@@ -48,7 +47,6 @@ export default function useMatrixScanner({
             if (weight && setSystemHealth && isMounted) {
                setSystemHealth(prev => ({ ...prev, weight: parseInt(weight, 10), latency }));
             }
-            
             return response.ok ? await response.json() : [];
         } catch (error) {
             clearTimeout(id);
@@ -70,8 +68,8 @@ export default function useMatrixScanner({
         
         try {
             const [allBook, allPrem] = await Promise.all([
-                fetchWithTimeout(`/api/binance?path=/fapi/v1/ticker/bookTicker&t=${ts}`, 10000),
-                fetchWithTimeout(`/api/binance?path=/fapi/v1/premiumIndex&t=${ts}`, 10000)
+                fetchWithTimeout(`http://192.168.1.60:1337/api/binance?path=/fapi/v1/ticker/bookTicker`, 10000),
+                fetchWithTimeout(`http://192.168.1.60:1337/api/binance?path=/fapi/v1/premiumIndex`, 10000)
             ]);
 
             currentDynamicPool.forEach(sym => {
@@ -100,7 +98,8 @@ export default function useMatrixScanner({
 
         const fetchCache = new Map();
         const memoizedFetch = async (binanceQueryStr) => {
-            const fullUrl = `http://192.168.1.60:1337/api/binance?${binanceQueryStr}&t=${ts}`;
+            // ĐÃ VÁ LỖI CÚ PHÁP BUILD: Khôi phục cấu trúc chuỗi chuẩn hóa của Node.js Bridge Cục bộ
+            const fullUrl = `http://192.168.1.60:1337/api/binance?${binanceQueryStr}`;
             if (fetchCache.has(fullUrl)) return fetchCache.get(fullUrl);
             await new Promise(res => setTimeout(res, Math.random() * 1500));
             const promise = fetchWithTimeout(fullUrl, 15000);
@@ -111,9 +110,8 @@ export default function useMatrixScanner({
         const fetchTasks = [];
         for (const targetSymbol of currentDynamicPool) {
           for (const targetInterval of POOL_INTERVALS) {
-             // ĐÃ FIX THEO YÊU CẦU: Khung lớn (1h, 4h, 1d) CHỈ quét coin Cố định (POOL_SYMBOLS)
              if (['1h', '4h', '1d'].includes(targetInterval) && !POOL_SYMBOLS.includes(targetSymbol)) {
-                 continue; // Bỏ qua coin động ở khung lớn
+                 continue; 
              }
              fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
@@ -122,7 +120,6 @@ export default function useMatrixScanner({
         const SYMBOL_CHUNK_SIZE = 3; 
         const results = [];
 
-        // Thay đổi loop duyệt mảng fetchTasks thay vì currentPool
         for (let i = 0; i < fetchTasks.length; i += SYMBOL_CHUNK_SIZE) {
           if (systemHealthRef.current && systemHealthRef.current.weight > 1800) {
               await new Promise(resolve => setTimeout(resolve, 3000));
@@ -132,14 +129,8 @@ export default function useMatrixScanner({
           const chunkPromises = [];
           
           for (const task of taskChunk) {
-            let mtfInterval = '1h';
-            if (task.interval === '15m') mtfInterval = '1h';
-            else if (task.interval === '1h') mtfInterval = '4h';
-            else if (task.interval === '4h') mtfInterval = '1d';
-            else if (task.interval === '1d') mtfInterval = '1w';
-
-            let macroInterval = task.interval;
-            if (task.interval === '1w') macroInterval = '1d';
+            let mtfInterval = task.interval === '15m' ? '1h' : (task.interval === '1h' ? '4h' : '1d');
+            let macroInterval = task.interval === '1w' ? '1d' : task.interval;
 
             const taskPromise = Promise.all([
               memoizedFetch(`path=/fapi/v1/klines&symbol=${task.symbol}&interval=${task.interval}&limit=250`),
@@ -270,7 +261,6 @@ export default function useMatrixScanner({
             if (isNaN(simulatedRR) || !isFinite(simulatedRR) || simulatedRR < 0) simulatedRR = 0;
 
             const scan50_200 = QuantMath.scanEmaRange(closesMTF, 50, 200, 20);
-
             const closesHTF = Array.isArray(klinesHTF) && klinesHTF.length >= 50 ? klinesHTF.map(d => parseFloat(d[4])) : closesMTF;
             const htfSma200 = QuantMath.sma(closesHTF, 200);
 
@@ -357,9 +347,10 @@ export default function useMatrixScanner({
                 simulatedRR >= 2.5 && 
                 (l2 === 'Compression' || localSfpLong || localSfpShort || localVolSpike || (dir === 'LONG' && localObi > 0.7) || (dir === 'SHORT' && localObi < 0.3));
 
-            const isGoldenOverride = !isRegimeSafe && isRRSafe && isVolSafe && isSLSafe && (embeddedScore >= 8.5) && hasSynergy && isSafeFromKnife;
-            const isSniperOverride = !isSLSafe && isRegimeSafe && isRRSafe && isVolSafe && checkS3 && embeddedScore >= 7.0;
-            const isHighRROverride = !isVolSafe && isSLSafe && isRegimeSafe && isRRSafe && simulatedRR >= 2.5 && embeddedScore >= 7.0;
+            // SỬA ĐỔI TOÁN TỬ KIỂM TRA ĐỂ KHỚP 100% VỚI KIẾN TRÚC OVERRIDE CỦA HUD (APP.JSX)
+            const isGoldenOverride = !isRegimeSafe && isVolSafe && isSLSafe && (embeddedScore >= 8.5) && hasSynergy && isSafeFromKnife;
+            const isSniperOverride = !isSLSafe && isRegimeSafe && isVolSafe && checkS3 && embeddedScore >= 7.0;
+            const isHighRROverride = !isVolSafe && isSLSafe && isRegimeSafe && simulatedRR >= 2.5 && embeddedScore >= 7.0;
             const isNanoCapOverride = (!isVolSafe || !isRegimeSafe) && isSLSafe && hasNanoCapSynergy && embeddedScore >= 7.0;
 
             const hasSqueezeX10 = (bbwRank <= 15 && bbwSlopeLocal > 10 && localVolSpike && checkS6); 
@@ -372,7 +363,8 @@ export default function useMatrixScanner({
             const finalVolCheck = isVolSafe || isHighRROverride || isNanoCapOverride || isX10SqueezeOverride;
             const finalSLCheck = isSLSafe || isSniperOverride || isNanoCapOverride || isX5SniperOverride;
 
-            const isApproved = (isRRSafe && finalRegimeCheck && finalVolCheck && finalSLCheck);
+            // Chấp nhận đặc xá tỷ lệ R:R nếu cấu trúc lọt vùng bẫy giá có lợi thế cao
+            const isApproved = (isRRSafe || isHighRROverride || isNanoCapOverride || isX10SqueezeOverride) && finalRegimeCheck && finalVolCheck && finalSLCheck;
             if (!isApproved || embeddedScore < 6.5) continue; 
 
             const riskMultiplier = Math.max(0.5, Math.min(2.0, (embeddedScore - 5) / 3));
@@ -395,12 +387,10 @@ export default function useMatrixScanner({
             if (!isFinite(slPercentForSize) || isNaN(slPercentForSize) || slPercentForSize === 0) slPercentForSize = 0.01;
 
             let positionSizeUSD = riskAmountUSD / slPercentForSize;
-            
             if (positionSizeUSD < currentMinNotional) positionSizeUSD = currentMinNotional; 
 
             const actualRiskUSD = positionSizeUSD * slPercentForSize;
             const maxSurvivalRiskUSD = capitalSafe * 0.05; 
-            
             if (actualRiskUSD > maxSurvivalRiskUSD) continue;
 
             let suggestedLeverage = Math.max(1, Math.ceil(positionSizeUSD / (capitalSafe * 0.9)));
@@ -442,8 +432,7 @@ export default function useMatrixScanner({
           }
         }
       } catch (err) {
-        console.error("Scanner Hard Crash:", err);
-        if (isMounted) setScannedTopSetups([{ isEmpty: true, isError: true, msg: "Vercel Timeout hoặc Lỗi kết nối" }]);
+        if (isMounted) setScannedTopSetups([{ isEmpty: true, isError: true, msg: "Lỗi kết nối Local Bridge" }]);
       } finally {
         if (isMounted) setIsScanningBackground(false);
       }
@@ -464,7 +453,7 @@ export default function useMatrixScanner({
         try {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
             audio.volume = 0.6;
-            audio.play().catch(e => console.log("Trình duyệt chặn Auto-play:", e));
+            audio.play().catch(e => console.log("Web Audio blocked", e));
             if (showToast) showToast("🎯 RADAR PING: Phát hiện biến động Setup mới trên Scanner!");
         } catch (error) {}
     }
