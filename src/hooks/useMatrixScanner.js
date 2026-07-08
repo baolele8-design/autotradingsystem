@@ -1,5 +1,4 @@
 /// FILE: src/hooks/useMatrixScanner.js
-
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 import { POOL_INTERVALS, POOL_SYMBOLS } from '../config/constants';
@@ -65,8 +64,7 @@ export default function useMatrixScanner({
       const currentMinNotionals = dynamicMinNotionalsRef.current || {};
 
       try {
-        // Khóa TS vào chu kỳ 30s để bắt Vercel Edge Server trả Cache, không bào API Limit của Binance
-        const ts = Math.floor(Date.now() / 30000) * 30000; 
+        const ts = Math.floor(Date.now() / 30000) * 30000;
         const scanResultsPool = [];
         const realtimeMetrics = {};
         
@@ -104,7 +102,7 @@ export default function useMatrixScanner({
         const memoizedFetch = async (binanceQueryStr) => {
             const fullUrl = `/api/binance?${binanceQueryStr}&t=${ts}`;
             if (fetchCache.has(fullUrl)) return fetchCache.get(fullUrl);
-            await new Promise(res => setTimeout(res, Math.random() * 1000));
+            await new Promise(res => setTimeout(res, Math.random() * 1500));
             const promise = fetchWithTimeout(fullUrl, 15000);
             fetchCache.set(fullUrl, promise);
             return promise;
@@ -113,8 +111,9 @@ export default function useMatrixScanner({
         const fetchTasks = [];
         for (const targetSymbol of currentDynamicPool) {
           for (const targetInterval of POOL_INTERVALS) {
+             // ĐÃ FIX THEO YÊU CẦU: Khung lớn (1h, 4h, 1d) CHỈ quét coin Cố định (POOL_SYMBOLS)
              if (['1h', '4h', '1d'].includes(targetInterval) && !POOL_SYMBOLS.includes(targetSymbol)) {
-                 continue; 
+                 continue; // Bỏ qua coin động ở khung lớn
              }
              fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
@@ -123,6 +122,7 @@ export default function useMatrixScanner({
         const SYMBOL_CHUNK_SIZE = 3; 
         const results = [];
 
+        // Thay đổi loop duyệt mảng fetchTasks thay vì currentPool
         for (let i = 0; i < fetchTasks.length; i += SYMBOL_CHUNK_SIZE) {
           if (systemHealthRef.current && systemHealthRef.current.weight > 1800) {
               await new Promise(resolve => setTimeout(resolve, 3000));
@@ -450,8 +450,7 @@ export default function useMatrixScanner({
     };
 
     runCrossAssetScan();
-    // Đã thay đổi Interval thành 30s chẵn theo yêu cầu của hệ thống
-    const scanTimer = setInterval(runCrossAssetScan, 30000); 
+    const scanTimer = setInterval(runCrossAssetScan, 30000);
     return () => { isMounted = false; clearInterval(scanTimer); };
   }, []); 
 

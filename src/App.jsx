@@ -411,12 +411,33 @@ BẤT DI BẤT DỊCH:
     setIsAnalyzing(false);
   };
 
+  // THAY THẾ HÀM handleSaveTradeLog (Dòng 265 - 299)
   const handleSaveTradeLog = async () => {
     if (!supabase) return;
     try {
+      // ÉP KIỂU VÀ NÉN GỌN DỮ LIỆU: Loại bỏ mảng Arrays để không làm tràn Data JSON của Supabase
+      const compressedAutoData = {
+          currentPrice: autoData.currentPrice,
+          atr14: autoData.atr14,
+          adx: autoData.adx,
+          rsi: autoData.rsi,
+          cmf: autoData.cmf,
+          bbwRank: autoData.bbwRank,
+          obi: autoData.obi,
+          fundingRate: autoData.fundingRate,
+          oiDelta: autoData.oiDelta,
+          isOiSpiking: autoData.isOiSpiking,
+          isBullishSFP: autoData.isBullishSFP,
+          isBearishSFP: autoData.isBearishSFP,
+          btcDomValue: autoData.btcDomValue,
+          ema20Slope: autoData.ema20.slope,
+          ema50Slope: autoData.ema50.slope,
+          ema200Slope: autoData.ema200.slope
+      };
+
       const fullSystemContext = {
          vector_details: vectorRegime.details,
-         auto_data: autoData,
+         auto_data: compressedAutoData,
          math_core: mathCore,
          api_macro: apiMacro
       };
@@ -443,6 +464,7 @@ BẤT DI BẤT DỊCH:
     } catch (e) { showToast(`❌ Lỗi Supabase: ${e.message}`); }
   };
 
+  // THAY THẾ HÀM syncBinanceToSupabase (Dòng 301 - 338)
   const syncBinanceToSupabase = async () => {
     if (!supabase || !binancePositions) return;
     setIsSyncing(true);
@@ -467,21 +489,49 @@ BẤT DI BẤT DỊCH:
         } 
         else if (log.status === 'OPEN') {
            if (positionAmt === 0) { 
+              // LỆNH ĐÃ ĐÓNG: Kéo Realized PnL và Fee thực tế từ Binance
+              let finalPnl = 0;
               let exitPrice = autoData?.currentPrice;
-              if (log.symbol !== symbol) { 
-                  try { const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${log.symbol}`); const data = await res.json(); if (data.price) exitPrice = parseFloat(data.price); } catch(e) {}
-              }
-              if (!exitPrice) exitPrice = parseFloat(log.entry);
+              
+              try {
+                  const ts = Date.now();
+                  const tradeRes = await fetch(`/api/binance?path=/fapi/v1/userTrades&symbol=${log.symbol}&isPrivate=true&limit=20&t=${ts}`);
+                  if (tradeRes.ok) {
+                      const trades = await tradeRes.json();
+                      const logTime = new Date(log.created_at).getTime();
+                      
+                      // Lọc các giao dịch đóng lệnh (Có PnL != 0) sau thời điểm tạo lệnh
+                      const closingTrades = trades.filter(t => t.time > logTime && parseFloat(t.realizedPnl) !== 0);
+                      
+                      if (closingTrades.length > 0) {
+                          const rawPnl = closingTrades.reduce((sum, t) => sum + parseFloat(t.realizedPnl), 0);
+                          const totalFee = closingTrades.reduce((sum, t) => sum + parseFloat(t.commission), 0);
+                          finalPnl = rawPnl - totalFee; // PnL ròng đã trừ phí
 
-              const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
-              const priceDiff = exitPrice - parseFloat(log.entry);
-              const finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
+                          const totalQty = closingTrades.reduce((sum, t) => sum + parseFloat(t.qty), 0);
+                          const totalCost = closingTrades.reduce((sum, t) => sum + (parseFloat(t.price) * parseFloat(t.qty)), 0);
+                          exitPrice = totalCost / totalQty; // Giá thoát trung bình thực tế
+                      } else {
+                          // Fallback toán học nếu không tìm thấy Trade History
+                          if (!exitPrice) exitPrice = parseFloat(log.entry);
+                          const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
+                          const priceDiff = exitPrice - parseFloat(log.entry);
+                          finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
+                      }
+                  }
+              } catch (e) {
+                  // Fallback toán học an toàn
+                  if (!exitPrice) exitPrice = parseFloat(log.entry);
+                  const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
+                  const priceDiff = exitPrice - parseFloat(log.entry);
+                  finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
+              }
 
               await supabase.from('trade_logs').update({ 
                   status: finalPnl > 0 ? 'WIN' : 'LOSS', pnl_usd: finalPnl, close_price: exitPrice,
                   exit_reason: finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS', close_time: new Date().toISOString()
               }).eq('id', log.id);
-              showToast(`🔄 Đã đóng lệnh ${log.symbol}! (PnL: ${finalPnl.toFixed(2)}$)`);
+              showToast(`🔄 Đã đóng lệnh ${log.symbol}! (PnL Ròng: ${finalPnl.toFixed(2)}$)`);
            } else { 
               const livePnl = parseFloat(currentPosition.unRealizedProfit);
               let newMfe = log.max_favorable_excursion_usd || 0; let newMae = log.max_adverse_excursion_usd || 0;

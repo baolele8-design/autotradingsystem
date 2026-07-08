@@ -1,5 +1,4 @@
-/// FILE: src/hooks/useLiveData.js
-
+// FILE: src/hooks/useLiveData.js
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 
@@ -62,7 +61,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     let isMounted = true;
     const fetchBracketsAndFees = async () => {
       try {
-        const ts = Math.floor(Date.now() / 60000); // Đệm Cache 1 phút
+        const ts = Date.now();
         const resBracket = await fetch(`/api/binance?path=/fapi/v1/leverageBracket&symbol=${symbol}&isPrivate=true&t=${ts}`);
         if (resBracket.ok) {
            const data = await resBracket.json();
@@ -116,8 +115,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         let macroInterval = intervalTime;
         if (intervalTime === '1w') macroInterval = '1d'; 
 
-        // Cache Buster chặn theo Block 15 giây để tích hợp sức mạnh Edge Cache Vercel
-        const ts = Math.floor(Date.now() / 15000) * 15000; 
+        const ts = Math.floor(Date.now() / 15000) * 15000;
         
         const safeFetch = async (url) => {
           try {
@@ -258,6 +256,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         const isObvBearDivergence = (currentPrice > htfSma200) && (obvArray[obvArray.length-1] < obvEma20);
         const isObvBullDivergence = (currentPrice < htfSma200) && (obvArray[obvArray.length-1] > obvEma20);
 
+        // VÁ LỖI ĐỒNG BỘ: Chuyền parameter chính xác cho detectSFP_Advanced
         setAutoData({
             currentPrice, atr14, atrPercent: currentPrice > 0 ? (atr14 / currentPrice) * 100 : 0, atrRank,
             adx: adxValue, htfSma200, rsi: rsiValue, bbwRank, bbw: bollinger20.bbw, cmf: cmfValue,
