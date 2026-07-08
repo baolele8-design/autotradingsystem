@@ -1,6 +1,6 @@
 // FILE: src/components/terminal/OrderForm.jsx
 import React, { useState } from 'react';
-import { Zap, TrendingUp, TrendingDown, BarChart3, Lock, Rocket, Loader2, Target } from 'lucide-react'; // <-- ĐÃ THÊM IMPORT TARGET VÀO ĐÂY
+import { Zap, TrendingUp, TrendingDown, BarChart3, Lock, Rocket, Loader2, Target, FileSignature } from 'lucide-react'; // Đã thêm FileSignature
 
 export default function OrderForm({
   autoData, tradeSetup, setTradeSetup, liveCapital, mathCore, tradeStats,
@@ -8,6 +8,27 @@ export default function OrderForm({
 }) {
   const [isExecuting, setIsExecuting] = useState(false);
   const [execStatus, setExecStatus] = useState('');
+
+  // -------------------------------------------------------------
+  // HÀM MỚI: 1-Click Ký Hợp Đồng TradFi
+  // -------------------------------------------------------------
+  const handleSignTradFi = async () => {
+    setIsExecuting(true);
+    setExecStatus('⏳ Đang liên kết API để ký hợp đồng TradFi với Binance...');
+    try {
+      const res = await fetch('/api/binance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'SIGN_TRADFI' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.details?.msg || data.error || 'Lỗi khi ký.');
+      setExecStatus('✅ ĐÃ KÝ HỢP ĐỒNG TRADFI THÀNH CÔNG! BẠN ĐÃ CÓ THỂ PHÓNG LỆNH.');
+    } catch (err) {
+      setExecStatus('❌ LỖI KÝ TRADFI: ' + err.message);
+    }
+    setIsExecuting(false);
+  };
 
   const handleExecuteBatch = async () => {
     if (mathCore.hasMinNotionalError || tradeSetup.entry <= 0 || tradeSetup.slTech <= 0) {
@@ -46,7 +67,6 @@ export default function OrderForm({
             const side = tradeSetup.direction === 'LONG' ? 'BUY' : 'SELL';
             const exitSide = tradeSetup.direction === 'LONG' ? 'SELL' : 'BUY';
 
-            // 1. Lệnh Entry
             batch.push({
                 symbol: symbol,
                 side: side,
@@ -55,7 +75,6 @@ export default function OrderForm({
                 ...(tradeSetup.execution === 'LIMIT' ? { price: finalEntry, timeInForce: 'GTC' } : {})
             });
 
-            // 2. Lệnh Stoploss Cứng (ĐÃ THÊM priceProtect)
             if (parseFloat(finalSl) > 0) {
                 batch.push({ 
                     symbol: symbol, side: exitSide, type: 'STOP_MARKET', 
@@ -63,7 +82,6 @@ export default function OrderForm({
                 });
             }
 
-            // 3. Lệnh Take Profit (ĐÃ THÊM priceProtect)
             if (parseFloat(finalTp) > 0) {
                 batch.push({ 
                     symbol: symbol, side: exitSide, type: 'TAKE_PROFIT_MARKET', 
@@ -93,7 +111,7 @@ export default function OrderForm({
                 const errors = data.filter(r => r.error === true || r.code !== undefined);
                 if (errors.length > 0) {
                     console.error("LỖI CHI TIẾT TỪ BINANCE:", errors);
-                    throw new Error(`Entry đã khớp nhưng sàn TỪ CHỐI ${errors.length} lệnh SL/TP. Vui lòng check ngay trên App Binance!`);
+                    throw new Error(`Entry đã khớp nhưng sàn TỪ CHỐI lệnh (Gợi ý: ${errors[0]?.msg}). Vui lòng check ngay trên App Binance!`);
                 }
             }
 
@@ -127,8 +145,20 @@ export default function OrderForm({
       </div>
 
       {execStatus && (
-          <div className={`mb-3 text-[10px] font-bold p-2 rounded border ${execStatus.includes('✅') ? 'bg-emerald-950/30 text-emerald-400 border-emerald-900' : 'bg-red-950/30 text-red-400 border-red-900'} animate-pulse`}>
-              {execStatus}
+          <div className={`mb-3 text-[10px] font-bold p-2 rounded border flex flex-col gap-2 ${execStatus.includes('✅') ? 'bg-emerald-950/30 text-emerald-400 border-emerald-900' : 'bg-red-950/30 text-red-400 border-red-900'} animate-pulse`}>
+              <span>{execStatus}</span>
+              
+              {/* NÚT BYPASS HIỆN RA KHI CÓ LỖI TRADFI */}
+              {execStatus.includes('TradFi-Perps') && (
+                  <button 
+                    onClick={handleSignTradFi} 
+                    disabled={isExecuting}
+                    className="bg-amber-600/20 text-amber-400 border border-amber-500/50 px-3 py-1.5 rounded w-max hover:bg-amber-600/40 flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(217,119,6,0.3)]"
+                  >
+                     {isExecuting ? <Loader2 className="w-3 h-3 animate-spin"/> : <FileSignature className="w-3 h-3" />}
+                     KÝ HỢP ĐỒNG TRADFI (1-CLICK BYPASS)
+                  </button>
+              )}
           </div>
       )}
 
@@ -177,7 +207,7 @@ export default function OrderForm({
         <div className={`bg-gradient-to-br p-4 rounded-lg border flex flex-col justify-between shadow-inner relative transition-colors ${mathCore.hasMinNotionalError ? 'from-red-950/40 to-[#0a0a0c] border-red-900/50' : mathCore.isSizeForcedByExchange ? 'from-amber-950/30 to-[#0a0a0c] border-amber-900/50' : 'from-slate-900 to-[#0a0a0c] border-slate-800'}`}>
           <div className="absolute top-2 right-2 text-[8px] text-slate-600 font-bold border border-slate-800 px-1.5 py-0.5 rounded uppercase">Định Cỡ Vị Thế</div>
           
-          {/* GIAO DIỆN MỚI: HIỂN THỊ TÊN CHIẾN THUẬT ĐANG KÍCH HOẠT */}
+          {/* GIAO DIỆN HIỂN THỊ TÊN CHIẾN THUẬT */}
           <div className="mt-2 mb-1 flex items-center justify-between border-b border-slate-800 pb-2">
              <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
                  <Target className="w-3.5 h-3.5 text-blue-500" /> CHIẾN THUẬT AUTO:

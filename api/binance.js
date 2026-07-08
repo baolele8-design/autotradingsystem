@@ -14,6 +14,39 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Missing API Keys on Backend.' });
       }
 
+      // ---------------------------------------------------------------------
+      // VÁ LỖI MỚI: Bypass Ký hợp đồng TradFi (Vàng, Bạc, Ngoại hối)
+      // ---------------------------------------------------------------------
+      if (req.body.action === 'SIGN_TRADFI') {
+        const params = new URLSearchParams();
+        params.append('timestamp', Date.now().toString());
+        params.append('recvWindow', '5000');
+        
+        const queryString = params.toString();
+        const signature = crypto.createHmac('sha256', API_SECRET).update(queryString).digest('hex');
+        
+        // Endpoint chính thức của Binance cho TradFi-Perps
+        const targetUrl = `https://fapi.binance.com/fapi/v1/stock/contract?${queryString}&signature=${signature}`;
+        
+        const binanceRes = await fetch(targetUrl, {
+          method: 'POST',
+          headers: {
+            'X-MBX-APIKEY': API_KEY,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        });
+
+        const textRaw = await binanceRes.text();
+        let data;
+        try { data = JSON.parse(textRaw); } catch(e) { data = { msg: textRaw } };
+
+        if (!binanceRes.ok) return res.status(binanceRes.status).json({ error: 'TradFi Sign Failed', details: data });
+        return res.status(200).json(data);
+      }
+
+      // ---------------------------------------------------------------------
+      // CÁC LOGIC BATCH ORDERS VÀ LỆNH LIMIT/MARKET GIỮ NGUYÊN
+      // ---------------------------------------------------------------------
       if (req.body.batchOrders) {
         const params = new URLSearchParams();
         params.append('batchOrders', JSON.stringify(req.body.batchOrders));
@@ -33,7 +66,6 @@ export default async function handler(req, res) {
           }
         });
 
-        // Bóc tách Header Rate Limit của Binance
         const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
         if (weight1m) {
             res.setHeader('x-mbx-used-weight-1m', weight1m);
@@ -77,7 +109,6 @@ export default async function handler(req, res) {
         }
       });
 
-      // Bóc tách Header Rate Limit
       const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
       if (weight1m) {
           res.setHeader('x-mbx-used-weight-1m', weight1m);
@@ -93,7 +124,7 @@ export default async function handler(req, res) {
     }
 
     // =========================================================================
-    // 2. LUỒNG LẤY DỮ LIỆU (GET) - AN TOÀN VÀ BỌC LỖI TOÀN DIỆN
+    // 2. LUỒNG LẤY DỮ LIỆU (GET) - GIỮ NGUYÊN
     // =========================================================================
     if (req.method === 'GET') {
       const queryParams = req.query || {};
@@ -133,7 +164,6 @@ export default async function handler(req, res) {
       
       const binanceRes = await fetch(targetUrl, { headers });
       
-      // Bóc tách Header Rate Limit của Binance
       const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
       if (weight1m) {
           res.setHeader('x-mbx-used-weight-1m', weight1m);

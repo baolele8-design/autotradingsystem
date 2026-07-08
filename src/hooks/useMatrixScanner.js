@@ -5,7 +5,7 @@ import { POOL_INTERVALS } from '../config/constants';
 
 export default function useMatrixScanner({ 
   liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast, 
-  dynamicPool, dynamicMinNotionals, setSystemHealth, systemHealth // ĐÃ VÁ LỖI SCOPE
+  dynamicPool, dynamicMinNotionals, setSystemHealth, systemHealth
 }) {
   const [scannedTopSetups, setScannedTopSetups] = useState([]);
   const [isScanningBackground, setIsScanningBackground] = useState(false);
@@ -97,7 +97,7 @@ export default function useMatrixScanner({
 
         const fetchTasks = [];
         for (const targetSymbol of currentPool) {
-          for (const targetInterval of POOL_INTERVALS) { // Đã chuẩn hóa không có 1W
+          for (const targetInterval of POOL_INTERVALS) {
             fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
         }
@@ -106,7 +106,6 @@ export default function useMatrixScanner({
         const results = [];
 
         for (let i = 0; i < fetchTasks.length; i += chunkSize) {
-          // VÁ LỖI: Rate Limit Pacing với Scope chuẩn
           if (systemHealth && systemHealth.weight > 1200) {
               await new Promise(resolve => setTimeout(resolve, 3000));
           }
@@ -118,7 +117,7 @@ export default function useMatrixScanner({
             if (task.interval === '15m') mtfInterval = '1h';
             else if (task.interval === '1h') mtfInterval = '4h';
             else if (task.interval === '4h') mtfInterval = '1d';
-            else if (task.interval === '1d') mtfInterval = '1w'; // Chỉ để MTF lấy data
+            else if (task.interval === '1d') mtfInterval = '1w';
 
             let macroInterval = task.interval;
             if (task.interval === '1w') macroInterval = '1d';
@@ -164,12 +163,8 @@ export default function useMatrixScanner({
             const quoteVolumes = klines.map(d => parseFloat(d[7])); 
             const price = closes[closes.length - 1];
 
-            // VÁ LỖI: Bơm Vol vào SFP
             const avgVolume20 = QuantMath.sma(quoteVolumes.slice(0, -1), 20);
             const closedVolume = quoteVolumes[quoteVolumes.length - 2];
-
-            const localSfpLong = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'LONG');
-            const localSfpShort = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'SHORT');
 
             const atr14 = QuantMath.atr(highs, lows, closes, 14);
             const rsi = QuantMath.rsi(closes, 14);
@@ -208,20 +203,27 @@ export default function useMatrixScanner({
             else if (volScoreLocal > 65) l2 = "Expansion";
             else l2 = "Normal";
 
+            // ĐỒNG BỘ ĐỘNG LUỒNG KHỚP LỆNH CHUẨN XÁC VỚI APP.JSX
             let dir = l1.includes('Trend Up') ? 'LONG' : 'SHORT'; 
+            let execType = 'LIMIT';
             if (l1 === 'Range' || l2 === 'Extreme') {
                 if (rsi < 45) { dir = "LONG"; }
                 else if (rsi > 55) { dir = "SHORT"; }
                 else { dir = cmf > 0 ? "LONG" : "SHORT"; }
+                execType = 'MARKET'; // Đã đồng bộ luồng gán lệnh MARKET
             }
 
-            // VÁ LỖI: Tính toán cấu trúc cRegime và tHold trước khi đẩy vào costDrag
             let cRegime = 1.0; let tHold = 3;
             if (l1.includes('Trend')) { cRegime = 1.2; tHold = 9; }
             else if (l2 === 'Extreme') { cRegime = 0.5; tHold = 1; }
             else { cRegime = 0.8; tHold = 2; }
 
-            const localObi = realtimeMetrics[targetSymbol]?.obi || 0.5;
+            // VÁ LỖI 1: Sửa .spread thành .obi cực kỳ nghiêm túc
+            const localObi = realtimeMetrics[targetSymbol]?.obi !== undefined ? realtimeMetrics[targetSymbol].obi : 0.5;
+            
+            const localSfpLong = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'LONG');
+            const localSfpShort = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'SHORT');
+
             const { tpMult, slMult } = QuantMath.dynamicAsymmetricTargets(
                 bbwRank, bbwSlopeLocal, (dir === 'LONG' ? localSfpLong : localSfpShort), 
                 (atr14/price)*100, localObi, dir
@@ -236,25 +238,15 @@ export default function useMatrixScanner({
             const tp1 = dir === 'LONG' ? entry + (tpMult * atr14) : entry - (tpMult * atr14);
 
             const riskDiffTech = Math.abs(entry - sl);
-            
-            const minSafeAtrScanner = 0.005;
-            const isCompressedScanner = l2 === 'Compression' || bbwRank < 20;
-            const currentAtrPercent = entry > 0 ? (atr14 / entry) * 100 : 0;
-            const effectiveAtrPercentLocal = isCompressedScanner ? Math.max(currentAtrPercent, minSafeAtrScanner * 100) * 1.5 : currentAtrPercent;
-            
-            const currentMultiplier = apiMacroRef.current.sessionMultiplier || 1.0;
-            const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * currentMultiplier; 
-            const dynamicSlDistance = riskDiffTech + slippageBuffer; 
-            
             const realSpread = realtimeMetrics[targetSymbol]?.spread || 0.05;
             const realFunding = realtimeMetrics[targetSymbol]?.funding || 0.0002;
             
             const activeMakerFee = tradeFeesRef.current.maker;
             const activeTakerFee = tradeFeesRef.current.taker;
             
-            // Đã gắn OBI vào CostDrag
-            const costDragLoss = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'MARKET', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
-            const costDragWin = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'LIMIT', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
+            // VÁ LỖI 2: Đẩy biến execType động vào costDrag để tính chính xác phí ma sát ròng
+            const costDragLoss = QuantMath.costDrag(entry, 'FUTURES', dir, execType, 'MARKET', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
+            const costDragWin = QuantMath.costDrag(entry, 'FUTURES', dir, execType, 'LIMIT', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
             const rewardDiff = Math.abs(tp1 - entry);
             
             let simulatedRR = riskDiffTech > 0 ? ((rewardDiff - costDragWin) / (riskDiffTech + costDragLoss)) : 0;
@@ -349,7 +341,6 @@ export default function useMatrixScanner({
             const isHighRROverride = !isVolSafe && isSLSafe && isRegimeSafe && isRRSafe && simulatedRR >= 2.5 && embeddedScore >= 7.0;
             const isNanoCapOverride = !isVolSafe && isSLSafe && hasNanoCapSynergy && embeddedScore >= 6.5;
 
-            // X5 VÀ X10 OVERRIDES
             const hasSqueezeX10 = (bbwRank <= 15 && bbwSlopeLocal > 10 && localVolSpike && checkS6); 
             const hasSniperX5 = ((dir === 'LONG' ? localSfpLong : localSfpShort) && ((dir==='LONG' && localObi>0.75) || (dir==='SHORT' && localObi<0.25)));
 
@@ -426,7 +417,7 @@ export default function useMatrixScanner({
     runCrossAssetScan();
     const scanTimer = setInterval(runCrossAssetScan, 40000); 
     return () => { isMounted = false; clearInterval(scanTimer); };
-  }, []); 
+  }, [systemHealth]); // Thêm systemHealth vào mảng phụ thuộc để tránh desync state
 
   useEffect(() => {
     if (!sonarEnabled || scannedTopSetups.length === 0 || scannedTopSetups[0]?.isEmpty) {
