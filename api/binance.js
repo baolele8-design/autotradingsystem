@@ -96,7 +96,7 @@ export default async function handler(req) {
 
       // KÍCH HOẠT CACHE 15 GIÂY CHO DỮ LIỆU CÔNG KHAI
       if (isPrivate !== 'true') {
-          responseHeaders.set('Cache-Control', 's-maxage=15, stale-while-revalidate=30');
+          responseHeaders.set('Cache-Control', 's-maxage=5, stale-while-revalidate=55');
       }
 
       const textRaw = await binanceRes.text();

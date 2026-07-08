@@ -1,4 +1,4 @@
-// FILE: src/hooks/useLiveData.js
+/// FILE: src/hooks/useLiveData.js
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 
@@ -13,21 +13,11 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
   const [tradeFees, setTradeFees] = useState({ maker: 0.0002, taker: 0.0004 });
 
   const [autoData, setAutoData] = useState(null);
-  const [cmcData, setCmcData] = useState({
-    btcDominanceRealtime: 55.0,
-    totalMarketCapBillion: 0,
-    fgiClassification: 'NEUTRAL'
-  });
+  const [cmcData, setCmcData] = useState({ btcDominanceRealtime: 55.0, totalMarketCapBillion: 0, fgiClassification: 'NEUTRAL' });
 
   const [apiMacro, setApiMacro] = useState({
-    fgiValue: 50,
-    longShortRatio: 1.0,
-    lsPositionVolRatio: 1.0, 
-    takerBuySellRatio: 1.0, 
-    tradingSession: 'ASIAN', 
-    sessionMultiplier: 0.8,
-    isWeekend: false,
-    realSpreadPct: 0.05 
+    fgiValue: 50, longShortRatio: 1.0, lsPositionVolRatio: 1.0, takerBuySellRatio: 1.0, 
+    tradingSession: 'ASIAN', sessionMultiplier: 0.8, isWeekend: false, realSpreadPct: 0.05 
   });
 
   const apiMacroRef = useRef(apiMacro);
@@ -38,19 +28,12 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
       const now = new Date();
       const utcHour = now.getUTCHours();
       const day = now.getUTCDay();
-      
-      let currentSession = 'ASIAN';
-      let mult = 0.8; 
-      
+      let currentSession = 'ASIAN'; let mult = 0.8; 
       if (utcHour >= 8 && utcHour < 13) { currentSession = 'LONDON'; mult = 1.2; }
       if (utcHour >= 13 && utcHour < 21) { currentSession = 'NEW_YORK'; mult = 1.5; }
-      
       const isWknd = (day === 0 || day === 6);
       if (isWknd) mult = mult * 0.5;
-      
-      setApiMacro(prev => ({ 
-        ...prev, isWeekend: isWknd, tradingSession: currentSession, sessionMultiplier: mult
-      }));
+      setApiMacro(prev => ({ ...prev, isWeekend: isWknd, tradingSession: currentSession, sessionMultiplier: mult }));
     };
     detectSessionAndWeekend();
     const timer = setInterval(detectSessionAndWeekend, 60000); 
@@ -61,7 +44,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     let isMounted = true;
     const fetchBracketsAndFees = async () => {
       try {
-        const ts = Date.now();
+        const ts = Math.floor(Date.now() / 60000); 
         const resBracket = await fetch(`/api/binance?path=/fapi/v1/leverageBracket&symbol=${symbol}&isPrivate=true&t=${ts}`);
         if (resBracket.ok) {
            const data = await resBracket.json();
@@ -98,6 +81,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     return () => { isMounted = false; clearInterval(timer); };
   }, []);
 
+  // LUỒNG 1: REST API LẤY CHỈ BÁO NẶNG (15S/LẦN) - GIỮ NGUYÊN HOÀN TOÀN LOGIC CỦA BẠN
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -115,19 +99,17 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         let macroInterval = intervalTime;
         if (intervalTime === '1w') macroInterval = '1d'; 
 
-        const ts = Math.floor(Date.now() / 15000) * 15000;
+        const ts = Math.floor(Date.now() / 15000) * 15000; 
         
         const safeFetch = async (url) => {
           try {
             const startPing = Date.now();
             const res = await fetch(url, { signal: controller.signal });
             const latency = Date.now() - startPing;
-            
             const weight = res.headers.get('x-mbx-used-weight-1m');
             if (weight && setSystemHealth && isMounted) {
                setSystemHealth(prev => ({ ...prev, weight: parseInt(weight, 10), latency }));
             }
-
             if (!res.ok) return null;
             return await res.json();
           } catch (e) { return null; }
@@ -180,7 +162,6 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
             const ask = parseFloat(realBookTicker.askPrice);
             const bidQty = parseFloat(realBookTicker.bidQty || 0);
             const askQty = parseFloat(realBookTicker.askQty || 0);
-            
             if (bid > 0) fetchedSpread = ((ask - bid) / bid) * 100;
             if (bidQty + askQty > 0) fetchedObi = bidQty / (bidQty + askQty);
         }
@@ -256,7 +237,6 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         const isObvBearDivergence = (currentPrice > htfSma200) && (obvArray[obvArray.length-1] < obvEma20);
         const isObvBullDivergence = (currentPrice < htfSma200) && (obvArray[obvArray.length-1] > obvEma20);
 
-        // VÁ LỖI ĐỒNG BỘ: Chuyền parameter chính xác cho detectSFP_Advanced
         setAutoData({
             currentPrice, atr14, atrPercent: currentPrice > 0 ? (atr14 / currentPrice) * 100 : 0, atrRank,
             adx: adxValue, htfSma200, rsi: rsiValue, bbwRank, bbw: bollinger20.bbw, cmf: cmfValue,
@@ -294,6 +274,37 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     const timer = setInterval(fetchData, 15000); 
     return () => { isMounted = false; controller.abort(); clearInterval(timer); };
   }, [symbol, intervalTime, indicatorSpecs, cmcData.btcDominanceRealtime]);
+
+  // LUỒNG 2: WEBSOCKET REAL-TIME TICKER (ĐỘ TRỄ ~100ms) - Cập nhật giá liên tục không dội Vercel
+  useEffect(() => {
+    let isMounted = true;
+    const wsUrl = `wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+        if (!isMounted) return;
+        const data = JSON.parse(event.data);
+        if (data.e === 'markPriceUpdate') {
+            const newPrice = parseFloat(data.p);
+            // Cập nhật giá ngay lập tức vào state autoData để Form tính toán Size/EV nảy số liên tục
+            setAutoData(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    currentPrice: newPrice,
+                    atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
+                };
+            });
+        }
+    };
+
+    ws.onerror = () => { console.log("WebSocket MarkPrice bị lỗi ngắt kết nối."); };
+
+    return () => {
+        isMounted = false;
+        ws.close();
+    };
+  }, [symbol]);
 
   return { loading, lastUpdated, systemError, liveCapital, binancePositions, leverageBrackets, tradeFees, autoData, cmcData, apiMacro };
 }

@@ -119,7 +119,7 @@ export default function useMatrixScanner({
           }
         }
 
-        const SYMBOL_CHUNK_SIZE = 3; 
+        const SYMBOL_CHUNK_SIZE = 6; 
         const results = [];
 
         // Thay đổi loop duyệt mảng fetchTasks thay vì currentPool
@@ -168,6 +168,7 @@ export default function useMatrixScanner({
           if (result.status !== 'fulfilled' || !Array.isArray(result.value.klines) || result.value.klines.length < 50) continue;
           
           try {
+            await new Promise(resolve => setTimeout(resolve, 5));
             const { symbol: targetSymbol, interval: targetInterval, klines, klinesMTF, klinesHTF, localTakerRatio, localLsRatio } = result.value;
 
             let closesMTF = [];
