@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 09, 2026, 01:50 AM ---
+--- START OF FILE Paste Jul 09, 2026, 02:00 AM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -2588,6 +2588,7 @@ export default function useMatrixScanner({
       const currentMinNotionals = dynamicMinNotionalsRef.current || {};
 
       try {
+        // Tối ưu Vercel Cache: Khóa chu kỳ vào block 30s
         const ts = Math.floor(Date.now() / 30000) * 30000;
         const scanResultsPool = [];
         const realtimeMetrics = {};
@@ -2635,9 +2636,8 @@ export default function useMatrixScanner({
         const fetchTasks = [];
         for (const targetSymbol of currentDynamicPool) {
           for (const targetInterval of POOL_INTERVALS) {
-             // ĐÃ FIX THEO YÊU CẦU: Khung lớn (1h, 4h, 1d) CHỈ quét coin Cố định (POOL_SYMBOLS)
              if (['1h', '4h', '1d'].includes(targetInterval) && !POOL_SYMBOLS.includes(targetSymbol)) {
-                 continue; // Bỏ qua coin động ở khung lớn
+                 continue; 
              }
              fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
@@ -2646,7 +2646,6 @@ export default function useMatrixScanner({
         const SYMBOL_CHUNK_SIZE = 6; 
         const results = [];
 
-        // Thay đổi loop duyệt mảng fetchTasks thay vì currentPool
         for (let i = 0; i < fetchTasks.length; i += SYMBOL_CHUNK_SIZE) {
           if (systemHealthRef.current && systemHealthRef.current.weight > 1800) {
               await new Promise(resolve => setTimeout(resolve, 3000));
@@ -2692,7 +2691,9 @@ export default function useMatrixScanner({
           if (result.status !== 'fulfilled' || !Array.isArray(result.value.klines) || result.value.klines.length < 50) continue;
           
           try {
+            // Giải phóng UI Thread (Tránh giật lag trình duyệt)
             await new Promise(resolve => setTimeout(resolve, 5));
+            
             const { symbol: targetSymbol, interval: targetInterval, klines, klinesMTF, klinesHTF, localTakerRatio, localLsRatio } = result.value;
 
             let closesMTF = [];
@@ -2811,32 +2812,86 @@ export default function useMatrixScanner({
             const isObvBearDivergenceLocal = (price > htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] < obvEma20Local);
             const isObvBullDivergenceLocal = (price < htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] > obvEma20Local);
 
-            const mockVectorDetails = { l1, l2, l3, l4, l5, l6, isAltcoinBleeding: isAltcoinBleedingLocal, isAltcoinSeason: false };
+            const currentMvrv = mvrvZScoreRef.current || 0.23;
+            const globalBtcDomValue = autoDataRef.current?.btcDomValue || 55.0;
+            const globalBtcDomSlope = autoDataRef.current?.btcDomSlope || 0;
+            const isAltcoinBleedingLocal = targetSymbol !== 'BTCUSDT' && globalBtcDomValue > 50 && globalBtcDomSlope > 0.5;
+
+            // =========================================================================
+            // BẢN VÁ LỖI CHIMERA DATA: KHỞI TẠO OBJECT DỮ LIỆU TINH KHIẾT (LOCAL)
+            // =========================================================================
+            const localAutoData = {
+                currentPrice: price,
+                atr14: atr14,
+                atrPercent: price > 0 ? (atr14 / price) * 100 : 0,
+                atrRank: atrRankLocal,
+                bbw: bollinger20.bbw,
+                bbwRank: bbwRank,
+                bbwSlope: bbwSlopeLocal,
+                adx: adxValue,
+                rsi: rsi,
+                cmf: cmf,
+                obi: localObi,
+                fundingRate: realFunding,
+                fundingSlope: 0, 
+                currentOi: 0, oiEma: 0, oiDelta: 0, isOiSpiking: false, 
+                lastClosedVolume: closedVolume,
+                avgVolume20: avgVolume20,
+                isObvBearDivergence: isObvBearDivergenceLocal,
+                isObvBullDivergence: isObvBullDivergenceLocal,
+                isBullishSFP: localSfpLong,
+                isBearishSFP: localSfpShort,
+                htfSma200: htfSma200,
+                ema20: { slope: scan20_50.fastSlope, value: scan20_50.fastEmaCurrent },
+                ema50: { slope: scan20_50.slowSlope, value: scan20_50.slowEmaCurrent },
+                ema200: { slope: scan50_200.slowSlope, value: scan50_200.slowEmaCurrent },
+                btcDomValue: globalBtcDomValue,
+                btcDomSlope: globalBtcDomSlope
+            };
+
+            const localApiMacro = {
+                fgiValue: apiMacroRef.current?.fgiValue || 50,
+                tradingSession: apiMacroRef.current?.tradingSession || 'ASIAN',
+                sessionMultiplier: apiMacroRef.current?.sessionMultiplier || 1.0,
+                isWeekend: apiMacroRef.current?.isWeekend || false,
+                realSpreadPct: realSpread,
+                longShortRatio: localLsRatio,
+                takerBuySellRatio: localTakerRatio,
+                lsPositionVolRatio: 1.0 
+            };
+
+            const mockVectorDetails = { 
+                l1, l2, l3, l4, l5, l6, 
+                isAltcoinBleeding: isAltcoinBleedingLocal, 
+                isAltcoinSeason: false 
+            };
+
+            // CHUẨN HÓA LOGIC RỦI RO & MIN NOTIONAL CHO SCANNER
+            const currentMinNotional = currentMinNotionalsRef.current?.[targetSymbol] || 5.0;
+            const capitalSafe = liveCapitalRef.current > 0 ? liveCapitalRef.current : 100.0; 
             
-            // TẠO MOCK OBJECT CHO TOÁN HỌC SINH TỒN
-            // TÍNH TOÁN MIN NOTIONAL CHUẨN XÁC ĐỂ TRÁNH QUÉT SAI
-            const currentMinNotional = currentMinNotionals[targetSymbol] || 5.0;
-            const capitalSafe = liveCapitalRef.current > 0 ? liveCapitalRef.current : 106.0; 
+            // Tính System Score Nháp (Draft) để quyết định Risk Multiplier
+            const draftSystemScore = TradeValidator.evaluateScore(
+                localAutoData, localApiMacro, mockVectorDetails, dir, currentMvrv, targetSymbol
+            );
             
-            const riskMultiplier = Math.max(0.5, Math.min(2.0, (embeddedScore - 5) / 3));
-            const appliedRiskPercent = 1.0 * riskMultiplier; // Base risk = 1%
+            const riskMultiplier = Math.max(0.5, Math.min(2.0, (draftSystemScore.score - 5) / 3));
+            const appliedRiskPercent = 1.0 * riskMultiplier; 
             let riskAmountUSD = capitalSafe * (appliedRiskPercent / 100); 
 
-            // Tính SL Distance
-            const atrPercentLocal = (atr14 / price) * 100;
+            // Tính Safety Buffer và Tỷ lệ SL %
             const isCompressedLocal = l2 === 'Compression' || bbwRank < 20;
-            const effectiveAtrPercentLocal = isCompressedLocal ? Math.max(atrPercentLocal, 0.5) * 1.5 : atrPercentLocal;
-            const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * (apiMacroRef.current?.sessionMultiplier || 1.0); 
+            const effectiveAtrPercentLocal = isCompressedLocal ? Math.max(localAutoData.atrPercent, 0.5) * 1.5 : localAutoData.atrPercent;
+            const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * localApiMacro.sessionMultiplier; 
             const sizeSlDistance = riskDiffTech + slippageBuffer;
 
             let slPercentForSize = sizeSlDistance / entry;
             if (!isFinite(slPercentForSize) || isNaN(slPercentForSize) || slPercentForSize === 0) slPercentForSize = 0.01;
 
             let positionSizeUSD = riskAmountUSD / slPercentForSize;
-            
             let hasMinNotionalErrorLocal = false;
             
-            // LOGIC CHUẨN: Chỉ phạt khi sàn ÉP tăng size, làm risk vượt 2.5% vốn
+            // LOGIC CHUẨN: Chỉ Block lệnh nêú Sàn ép size Min Notional đẩy rủi ro thực tế > 2.5% Vốn
             if (positionSizeUSD > 0 && positionSizeUSD < currentMinNotional) {
                 positionSizeUSD = currentMinNotional; 
                 const forcedRiskUSD = positionSizeUSD * slPercentForSize;
@@ -2845,32 +2900,29 @@ export default function useMatrixScanner({
                 }
             }
 
-            // TẠO MOCK OBJECT CHO TOÁN HỌC SINH TỒN
             const mockMathCore = {
                 theoreticalRR: simulatedRR.toFixed(2),
-                hasMinNotionalError: hasMinNotionalErrorLocal, // Áp dụng cờ lỗi chuẩn xác
+                hasMinNotionalError: hasMinNotionalErrorLocal, 
                 liqEstimate: { liqPrice: 0, maxLevForTier: 50 }, 
                 leverageExceedsExchangeCap: false,
                 liqSafetyMargin: 2.0
             };
 
-            // GỌI TRỌNG TÀI DUY NHẤT (Single Source of Truth)
+            // GỌI TRỌNG TÀI BẰNG OBJECT DỮ LIỆU ĐÃ LÀM SẠCH
             const localSystemScore = TradeValidator.evaluateScore(
-                {...autoData, adx: adxValue, cmf: cmf, rsi: rsi, isBullishSFP: localSfpLong, isBearishSFP: localSfpShort, fundingRate: realFunding, lastClosedVolume: closedVolume, avgVolume20: avgVolume20, currentPrice: price, htfSma200: htfSma200, ema200: {slope: scan50_200.slowSlope}, bbwSlope: bbwSlopeLocal, obi: localObi, isObvBearDivergence: isObvBearDivergenceLocal, isObvBullDivergence: isObvBullDivergenceLocal}, 
-                {...apiMacro, longShortRatio: localLsRatio, takerBuySellRatio: localTakerRatio, tradingSession: apiMacroRef.current.tradingSession}, 
-                mockVectorDetails, dir, currentMvrv, targetSymbol
+                localAutoData, localApiMacro, mockVectorDetails, dir, currentMvrv, targetSymbol
             );
 
             const localGates = TradeValidator.evaluateGates(
-                {...autoData, atr14: atr14, lastClosedVolume: closedVolume, avgVolume20: avgVolume20, bbwRank: bbwRank},
-                {...apiMacro, realSpreadPct: realSpread},
-                mockVectorDetails, mockMathCore, dir, 'FUTURES', entry, sl, localSystemScore, tradeLogs, targetSymbol
+                localAutoData, localApiMacro, mockVectorDetails, mockMathCore, 
+                dir, 'FUTURES', entry, sl, localSystemScore, tradeLogs, targetSymbol
             );
 
-            // NẾU TRỌNG TÀI BẢO "BLOCK" THÌ NEXT LUÔN COIN KHÁC, KHÔNG CHO LÊN BẢNG SCANNER
+            // NẾU TRỌNG TÀI BÁO "BLOCK" (isApproved = false) -> BỎ QUA COIN NÀY NGAY LẬP TỨC
             if (!localGates.isApproved) continue;
 
-            // Xử lý Override Tag để gắn màu tím, vàng, hồng... trên Scanner
+            // Xử lý Override Tag
+            let suggestedLeverage = Math.max(1, Math.ceil(positionSizeUSD / (capitalSafe * 0.9)));
             let overrideTag = strategyName !== "TIÊU CHUẨN (ADAPTIVE)" ? strategyName : '';
             if (overrideTag === '') {
                 if (localGates.isNanoOverride) overrideTag = '🦠 NANO-CAP';
@@ -2916,7 +2968,7 @@ export default function useMatrixScanner({
     };
 
     runCrossAssetScan();
-    const scanTimer = setInterval(runCrossAssetScan, 30000);
+    const scanTimer = setInterval(runCrossAssetScan, 30000); 
     return () => { isMounted = false; clearInterval(scanTimer); };
   }, []); 
 

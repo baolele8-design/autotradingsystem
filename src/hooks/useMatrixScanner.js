@@ -65,7 +65,6 @@ export default function useMatrixScanner({
       const currentMinNotionals = dynamicMinNotionalsRef.current || {};
 
       try {
-        // Tối ưu Vercel Cache: Khóa chu kỳ vào block 30s
         const ts = Math.floor(Date.now() / 30000) * 30000;
         const scanResultsPool = [];
         const realtimeMetrics = {};
@@ -150,9 +149,7 @@ export default function useMatrixScanner({
             ]).then(([klines, takerData, lsData, klinesMTF, klinesHTF]) => ({
               symbol: task.symbol,
               interval: task.interval,
-              klines,
-              klinesMTF, 
-              klinesHTF,
+              klines, klinesMTF, klinesHTF,
               localTakerRatio: (Array.isArray(takerData) && takerData.length > 0) ? parseFloat(takerData[takerData.length-1].buySellRatio) : 1.0,
               localLsRatio: (Array.isArray(lsData) && lsData.length > 0) ? parseFloat(lsData[lsData.length-1].longShortRatio) : 1.0
             }));
@@ -168,9 +165,7 @@ export default function useMatrixScanner({
           if (result.status !== 'fulfilled' || !Array.isArray(result.value.klines) || result.value.klines.length < 50) continue;
           
           try {
-            // Giải phóng UI Thread (Tránh giật lag trình duyệt)
             await new Promise(resolve => setTimeout(resolve, 5));
-            
             const { symbol: targetSymbol, interval: targetInterval, klines, klinesMTF, klinesHTF, localTakerRatio, localLsRatio } = result.value;
 
             let closesMTF = [];
@@ -241,9 +236,39 @@ export default function useMatrixScanner({
             else { cRegime = 0.8; tHold = 2; }
 
             const localObi = realtimeMetrics[targetSymbol]?.obi !== undefined ? realtimeMetrics[targetSymbol].obi : 0.5;
+            const realSpread = realtimeMetrics[targetSymbol]?.spread || 0.05;
+            const realFunding = realtimeMetrics[targetSymbol]?.funding || 0.0002;
             
             const localSfpLong = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'LONG');
             const localSfpShort = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'SHORT');
+
+            // --- BẢN VÁ: KHAI BÁO l3, l4, l5, l6 ĐỂ KHÔNG BỊ CRASH UNDEFINED ---
+            const isVolSpikeHUD = closedVolume > (avgVolume20 * 2.5);
+            let l3 = "Quiet";
+            if (localSfpLong) l3 = "Sweep Low (SFP)"; 
+            else if (localSfpShort) l3 = "Sweep High (SFP)";
+            else if (isVolSpikeHUD && price > scan20_50.fastEmaCurrent && l2 === "Expansion") l3 = "Breakout";
+            else if (isVolSpikeHUD && price < scan20_50.fastEmaCurrent && l2 === "Expansion") l3 = "Breakdown"; 
+            else if (isVolSpikeHUD) l3 = "Stop Hunt / Climax";
+
+            let l4 = "Neutral";
+            let l5 = "Weak / Mixed";
+            
+            const currentMvrv = mvrvZScoreRef.current || 0.23;
+            const globalBtcDomValue = autoDataRef.current?.btcDomValue || 55.0;
+            const globalBtcDomSlope = autoDataRef.current?.btcDomSlope || 0;
+            const isAltcoinBleedingLocal = targetSymbol !== 'BTCUSDT' && globalBtcDomValue > 50 && globalBtcDomSlope > 0.5;
+            const isAltcoinSeasonLocal = targetSymbol !== 'BTCUSDT' && globalBtcDomSlope < -0.5;
+
+            let l6 = "Fair Value"; 
+            if (currentMvrv > 3.5) { l6 = "Extreme Overvaluation"; } 
+            else if (currentMvrv >= 2.5) { l6 = "Moderate Overvaluation"; }
+            else if (currentMvrv >= 1.0) { l6 = "Fair to Overvalue"; } 
+            else if (currentMvrv >= 0.8) { l6 = "Fair to Undervalue"; }
+            else { l6 = "Undervaluation"; }
+            if (isAltcoinBleedingLocal) l6 += " (Altcoin Bleeding)"; 
+            else if (isAltcoinSeasonLocal) l6 += " (Altcoin Season)";
+            // -----------------------------------------------------------------
 
             const { tpMult, slMult, strategyName } = QuantMath.dynamicAsymmetricTargets(
                 bbwRank, bbwSlopeLocal, (dir === 'LONG' ? localSfpLong : localSfpShort), 
@@ -259,8 +284,6 @@ export default function useMatrixScanner({
             const tp1 = dir === 'LONG' ? entry + (tpMult * atr14) : entry - (tpMult * atr14);
 
             const riskDiffTech = Math.abs(entry - sl);
-            const realSpread = realtimeMetrics[targetSymbol]?.spread || 0.05;
-            const realFunding = realtimeMetrics[targetSymbol]?.funding || 0.0002;
             
             const activeMakerFee = tradeFeesRef.current.maker;
             const activeTakerFee = tradeFeesRef.current.taker;
@@ -273,7 +296,6 @@ export default function useMatrixScanner({
             if (isNaN(simulatedRR) || !isFinite(simulatedRR) || simulatedRR < 0) simulatedRR = 0;
 
             const scan50_200 = QuantMath.scanEmaRange(closesMTF, 50, 200, 20);
-
             const closesHTF = Array.isArray(klinesHTF) && klinesHTF.length >= 50 ? klinesHTF.map(d => parseFloat(d[4])) : closesMTF;
             const htfSma200 = QuantMath.sma(closesHTF, 200);
 
@@ -289,14 +311,7 @@ export default function useMatrixScanner({
             const isObvBearDivergenceLocal = (price > htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] < obvEma20Local);
             const isObvBullDivergenceLocal = (price < htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] > obvEma20Local);
 
-            const currentMvrv = mvrvZScoreRef.current || 0.23;
-            const globalBtcDomValue = autoDataRef.current?.btcDomValue || 55.0;
-            const globalBtcDomSlope = autoDataRef.current?.btcDomSlope || 0;
-            const isAltcoinBleedingLocal = targetSymbol !== 'BTCUSDT' && globalBtcDomValue > 50 && globalBtcDomSlope > 0.5;
-
-            // =========================================================================
-            // BẢN VÁ LỖI CHIMERA DATA: KHỞI TẠO OBJECT DỮ LIỆU TINH KHIẾT (LOCAL)
-            // =========================================================================
+            // BẢN VÁ LỖI CHIMERA DATA VÀ ĐỒNG BỘ FUNDING RATE (x100)
             const localAutoData = {
                 currentPrice: price,
                 atr14: atr14,
@@ -309,7 +324,7 @@ export default function useMatrixScanner({
                 rsi: rsi,
                 cmf: cmf,
                 obi: localObi,
-                fundingRate: realFunding,
+                fundingRate: realFunding * 100, // Đã fix đồng bộ % với App.jsx
                 fundingSlope: 0, 
                 currentOi: 0, oiEma: 0, oiDelta: 0, isOiSpiking: false, 
                 lastClosedVolume: closedVolume,
@@ -340,14 +355,12 @@ export default function useMatrixScanner({
             const mockVectorDetails = { 
                 l1, l2, l3, l4, l5, l6, 
                 isAltcoinBleeding: isAltcoinBleedingLocal, 
-                isAltcoinSeason: false 
+                isAltcoinSeason: isAltcoinSeasonLocal 
             };
 
-            // CHUẨN HÓA LOGIC RỦI RO & MIN NOTIONAL CHO SCANNER
             const currentMinNotional = currentMinNotionalsRef.current?.[targetSymbol] || 5.0;
             const capitalSafe = liveCapitalRef.current > 0 ? liveCapitalRef.current : 100.0; 
             
-            // Tính System Score Nháp (Draft) để quyết định Risk Multiplier
             const draftSystemScore = TradeValidator.evaluateScore(
                 localAutoData, localApiMacro, mockVectorDetails, dir, currentMvrv, targetSymbol
             );
@@ -356,7 +369,6 @@ export default function useMatrixScanner({
             const appliedRiskPercent = 1.0 * riskMultiplier; 
             let riskAmountUSD = capitalSafe * (appliedRiskPercent / 100); 
 
-            // Tính Safety Buffer và Tỷ lệ SL %
             const isCompressedLocal = l2 === 'Compression' || bbwRank < 20;
             const effectiveAtrPercentLocal = isCompressedLocal ? Math.max(localAutoData.atrPercent, 0.5) * 1.5 : localAutoData.atrPercent;
             const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * localApiMacro.sessionMultiplier; 
@@ -368,7 +380,6 @@ export default function useMatrixScanner({
             let positionSizeUSD = riskAmountUSD / slPercentForSize;
             let hasMinNotionalErrorLocal = false;
             
-            // LOGIC CHUẨN: Chỉ Block lệnh nêú Sàn ép size Min Notional đẩy rủi ro thực tế > 2.5% Vốn
             if (positionSizeUSD > 0 && positionSizeUSD < currentMinNotional) {
                 positionSizeUSD = currentMinNotional; 
                 const forcedRiskUSD = positionSizeUSD * slPercentForSize;
@@ -385,7 +396,6 @@ export default function useMatrixScanner({
                 liqSafetyMargin: 2.0
             };
 
-            // GỌI TRỌNG TÀI BẰNG OBJECT DỮ LIỆU ĐÃ LÀM SẠCH
             const localSystemScore = TradeValidator.evaluateScore(
                 localAutoData, localApiMacro, mockVectorDetails, dir, currentMvrv, targetSymbol
             );
@@ -395,10 +405,8 @@ export default function useMatrixScanner({
                 dir, 'FUTURES', entry, sl, localSystemScore, tradeLogs, targetSymbol
             );
 
-            // NẾU TRỌNG TÀI BÁO "BLOCK" (isApproved = false) -> BỎ QUA COIN NÀY NGAY LẬP TỨC
             if (!localGates.isApproved) continue;
 
-            // Xử lý Override Tag
             let suggestedLeverage = Math.max(1, Math.ceil(positionSizeUSD / (capitalSafe * 0.9)));
             let overrideTag = strategyName !== "TIÊU CHUẨN (ADAPTIVE)" ? strategyName : '';
             if (overrideTag === '') {
