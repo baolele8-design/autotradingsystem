@@ -48,6 +48,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
       const isWknd = (day === 0 || day === 6);
       if (isWknd) mult = mult * 0.5;
       
+
       setApiMacro(prev => ({ 
         ...prev, isWeekend: isWknd, tradingSession: currentSession, sessionMultiplier: mult
       }));
@@ -191,6 +192,8 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         if (lsPosData && lsPosData.length > 0) fetchedLsPos = parseFloat(lsPosData[lsPosData.length-1].longShortRatio);
         if (takerData && takerData.length > 0) fetchedTaker = parseFloat(takerData[takerData.length-1].buySellRatio);
 
+        const avgVolume20 = QuantMath.sma(volumesLTF.slice(0, -1), 20);
+
         setApiMacro(prev => ({ ...prev, realSpreadPct: fetchedSpread, longShortRatio: fetchedLsAcc, lsPositionVolRatio: fetchedLsPos, takerBuySellRatio: fetchedTaker }));
 
         const oiValues = Array.isArray(oiHist) ? oiHist.map(d => parseFloat(d.sumOpenInterestValue) || 0) : [0];
@@ -270,8 +273,8 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
             currentVolume: volumesLTF[volumesLTF.length - 1], lastClosedVolume: volumesLTF[volumesLTF.length - 2], 
             avgVolume20: QuantMath.sma(volumesLTF.slice(0, -1), 20), 
             isObvBearDivergence, isObvBullDivergence,
-            isBullishSFP: QuantMath.detectSFP_Advanced(highsLTF, lowsLTF, closesLTF, 'LONG'),
-            isBearishSFP: QuantMath.detectSFP_Advanced(highsLTF, lowsLTF, closesLTF, 'SHORT'),
+            isBullishSFP: QuantMath.detectSFP_Advanced(highsLTF, lowsLTF, closesLTF, volumesLTF, avgVolume20, 'LONG'),
+            isBearishSFP: QuantMath.detectSFP_Advanced(highsLTF, lowsLTF, closesLTF, volumesLTF, avgVolume20, 'SHORT'),
             btcDomValue, btcDomSlope
         });
 

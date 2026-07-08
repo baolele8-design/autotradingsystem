@@ -134,8 +134,14 @@ const QuantMath = {
   },
   
   // Ước tính chi phí trượt giá, phí giao dịch và Funding Rate (Cost Drag)
-  costDrag: (entryPrice, tradeType, direction, entryExecution, exitExecution, fundingRate, spreadPercent, holdingCycles = 1, makerFee = 0.0002, takerFee = 0.0004, interval = '1h') => { 
-    const entrySlippage = entryExecution === 'MARKET' ? 0.001 : 0; 
+  costDrag: (entryPrice, tradeType, direction, entryExecution, exitExecution, fundingRate, spreadPercent, holdingCycles = 1, makerFee = 0.0002, takerFee = 0.0004, interval = '1h', obi = 0.5) => { 
+    // BỔ SUNG LOGIC: Slippage bị phạt nặng nếu OBI bất lợi (Orderbook mỏng)
+    let slippagePenalty = 0;
+    if (entryExecution === 'MARKET') {
+        if (direction === 'LONG' && obi < 0.4) slippagePenalty = 0.0015; // Mua đuổi khi tường Sell dày
+        if (direction === 'SHORT' && obi > 0.6) slippagePenalty = 0.0015; // Bán đuổi khi tường Buy dày
+    }
+    const entrySlippage = entryExecution === 'MARKET' ? (0.001 + slippagePenalty) : 0; 
     const entryFee = entryExecution === 'MARKET' ? takerFee : makerFee;
     
     const exitSlippage = exitExecution === 'MARKET' ? 0.001 : 0; 
@@ -143,7 +149,7 @@ const QuantMath = {
 
     const spreadCost = (spreadPercent / 100) / 2;
     
-    const intervalToHours = { '5m': 5/60, '15m': 15/60, '1h': 1, '4h': 4, '1d': 24, '1w': 168 };
+    const intervalToHours = { '5m': 5/60, '15m': 15/60, '1h': 1, '4h': 4, '1d': 24 }; // ĐÃ XÓA 1W
     const hoursPerCandle = intervalToHours[interval] || 1;
     const totalHoldingHours = holdingCycles * hoursPerCandle;
     const realFundingCycles = totalHoldingHours / 8; 
@@ -209,12 +215,17 @@ const QuantMath = {
   },
   
   // Thuật toán phát hiện mô hình quét thanh khoản (Swing Failure Pattern - SFP)
-  detectSFP_Advanced: (highs, lows, closes, direction) => {
-    if (!closes || closes.length < 10) return false;
+  detectSFP_Advanced: (highs, lows, closes, volumes, avgVolume, direction) => {
+    if (!closes || closes.length < 10 || !volumes) return false;
     const triggerIndex = closes.length - 2; 
     const triggerClose = closes[triggerIndex];
     const triggerHigh = highs[triggerIndex];
     const triggerLow = lows[triggerIndex];
+    const triggerVol = volumes[triggerIndex];
+
+    if (triggerVol < avgVolume * 1.2) return false;
+    let lastPivotHigh = -1;
+    let lastPivotLow = Infinity;
 
     let lastPivotHigh = -1;
     let lastPivotLow = Infinity;
@@ -240,6 +251,28 @@ const QuantMath = {
     } else {
         return (lastPivotLow !== Infinity && triggerLow < lastPivotLow && triggerClose > lastPivotLow);
     }
+  },
+  dynamicAsymmetricTargets: (bbwRank, bbwSlope, isSfp, atrPercent, obi, direction) => {
+      let tpMult = 2.0; // Default R:R = 1:2
+      let slMult = 1.5; // Default SL = 1.5 ATR
+
+      // CHIẾN THUẬT 1: NANO-CAP SQUEEZE (X5 - X10)
+      // Điều kiện: Đang nén cực đại (BBW < 10), và bắt đầu ngóc đầu (bbwSlope > 10)
+      if (bbwRank <= 15 && bbwSlope > 10) {
+          tpMult = 7.0; // Kéo Target xa lên 7 ATR để bắt trọn cây nến Breakout
+          slMult = 1.0; // Bóp SL lại vì Breakout xịn không được quay lại nền giá
+      }
+      
+      // CHIẾN THUẬT 2: FLASH-CRASH SNIPER (X5)
+      // Điều kiện: Vừa quét SFP xong, và có tường Orderbook khổng lồ bảo vệ
+      if (isSfp) {
+          if ((direction === 'LONG' && obi > 0.75) || (direction === 'SHORT' && obi < 0.25)) {
+              tpMult = 4.0; // Kéo Target bắt cú Reversal
+              slMult = 0.6; // Đặt SL ngay sau bức tường Limit + Râu SFP
+          }
+      }
+
+      return { tpMult, slMult };
   },
 
   // Ước tính giá thanh lý và đòn bẩy tối đa dựa trên Bracket của Binance

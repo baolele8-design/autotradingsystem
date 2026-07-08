@@ -98,7 +98,7 @@ export default function useMatrixScanner({
 
         const fetchTasks = [];
         for (const targetSymbol of currentPool) {
-          for (const targetInterval of POOL_INTERVALS) {
+          for (const targetInterval of POOL_INTERVALS) { // Đã xóa 1W từ constants.js
             fetchTasks.push({ symbol: targetSymbol, interval: targetInterval });
           }
         }
@@ -107,6 +107,21 @@ export default function useMatrixScanner({
         const results = [];
 
         for (let i = 0; i < fetchTasks.length; i += chunkSize) {
+          // ========================================================
+          // CƠ CHẾ SMART RATE LIMIT PACING (BẢO VỆ API BINANCE)
+          // ========================================================
+          setSystemHealth(prev => {
+              if (prev.weight > 1500) {
+                  showToast("⚠️ API Weight cao. Scanner tự động giảm tốc (Pacing)...");
+              }
+              return prev;
+          });
+          
+          // Tự động tạm dừng (Sleep) 3 giây nếu Weight chạm ngưỡng nguy hiểm
+          if (systemHealth?.weight > 1200) {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+          }
+
           const chunk = fetchTasks.slice(i, i + chunkSize);
           
           const chunkPromises = chunk.map(task => {
@@ -197,24 +212,31 @@ export default function useMatrixScanner({
             else if (volScoreLocal > 65) l2 = "Expansion";
             else l2 = "Normal";
 
-            const closedVolume = quoteVolumes[quoteVolumes.length - 2];
             const avgVolume20 = QuantMath.sma(quoteVolumes.slice(0, -1), 20);
+            const closedVolume = quoteVolumes[quoteVolumes.length - 2];
 
             let dir = l1.includes('Trend Up') ? 'LONG' : 'SHORT'; 
-            let tpMult = 2.0; 
-
             if (l1 === 'Range' || l2 === 'Extreme') {
                 if (rsi < 45) { dir = "LONG"; }
                 else if (rsi > 55) { dir = "SHORT"; }
-                else { dir = cmf > 0 ? "LONG" : "SHORT"; tpMult = 1.5; }
+                else { dir = cmf > 0 ? "LONG" : "SHORT"; }
             }
+
+            // ========================================================
+            // KHỞI TẠO CHIẾN THUẬT BẤT ĐỐI XỨNG (x2, x5, x10)
+            // ========================================================
+            const localObi = realtimeMetrics[targetSymbol]?.obi || 0.5;
+            const { tpMult, slMult } = QuantMath.dynamicAsymmetricTargets(
+                bbwRank, bbwSlopeLocal, (dir === 'LONG' ? localSfpLong : localSfpShort), 
+                (atr14/price)*100, localObi, dir
+            );
 
             let suggestedEntry = price;
             if (!(l1 === 'Range' || l2 === 'Extreme')) {
                 suggestedEntry = dir === 'LONG' ? price - (0.5 * atr14) : price + (0.5 * atr14);
             }
             const entry = suggestedEntry;
-            const sl = dir === 'LONG' ? entry - (1.5 * atr14) : entry + (1.5 * atr14);
+            const sl = dir === 'LONG' ? entry - (slMult * atr14) : entry + (slMult * atr14);
             const tp1 = dir === 'LONG' ? entry + (tpMult * atr14) : entry - (tpMult * atr14);
 
             const riskDiffTech = Math.abs(entry - sl);
@@ -240,15 +262,15 @@ export default function useMatrixScanner({
             const activeMakerFee = tradeFeesRef.current.maker;
             const activeTakerFee = tradeFeesRef.current.taker;
             
-            const costDragLoss = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'MARKET', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval);
-            const costDragWin = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'LIMIT', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval);
+            const costDragLoss = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'MARKET', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
+            const costDragWin = QuantMath.costDrag(entry, 'FUTURES', dir, 'LIMIT', 'LIMIT', realFunding, realSpread, tHold, activeMakerFee, activeTakerFee, targetInterval, localObi);
             const rewardDiff = Math.abs(tp1 - entry);
             
             let simulatedRR = riskDiffTech > 0 ? ((rewardDiff - costDragWin) / (riskDiffTech + costDragLoss)) : 0;
             if (isNaN(simulatedRR) || !isFinite(simulatedRR) || simulatedRR < 0) simulatedRR = 0;
 
-            const localSfpLong = QuantMath.detectSFP_Advanced(highs, lows, closes, 'LONG');
-            const localSfpShort = QuantMath.detectSFP_Advanced(highs, lows, closes, 'SHORT');
+            const localSfpLong = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'LONG');
+            const localSfpShort = QuantMath.detectSFP_Advanced(highs, lows, closes, quoteVolumes, avgVolume20, 'SHORT');
             const scan50_200 = QuantMath.scanEmaRange(closesMTF, 50, 200, 20);
 
             const obvArrayLocal = [];
@@ -338,13 +360,20 @@ export default function useMatrixScanner({
             const isSniperOverride = !isSLSafe && isRegimeSafe && isRRSafe && isVolSafe && checkS3 && embeddedScore >= 7.0;
             const isHighRROverride = !isVolSafe && isSLSafe && isRegimeSafe && isRRSafe && simulatedRR >= 2.5 && embeddedScore >= 7.0;
             const isNanoCapOverride = !isVolSafe && isSLSafe && hasNanoCapSynergy && embeddedScore >= 6.5;
+            // ========================================================
+            // OVERRIDES MỚI: BĂT CÁC KÈO X5 - X10 TẠI SCANNER
+            // ========================================================
+            const hasSqueezeX10 = (bbwRank <= 15 && bbwSlopeLocal > 10 && localVolSpike && checkS6); 
+            const hasSniperX5 = ((dir === 'LONG' ? localSfpLong : localSfpShort) && ((dir==='LONG' && localObi>0.75) || (dir==='SHORT' && localObi<0.25)));
+
+            const isX10SqueezeOverride = !isVolSafe && isSLSafe && hasSqueezeX10 && embeddedScore >= 7.0 && simulatedRR >= 4.0;
+            const isX5SniperOverride = !isSLSafe && isRegimeSafe && hasSniperX5 && embeddedScore >= 7.0 && simulatedRR >= 3.0;
 
             const finalRegimeCheck = isRegimeSafe || isGoldenOverride;
-            const finalVolCheck = isVolSafe || isHighRROverride || isNanoCapOverride;
-            const finalSLCheck = isSLSafe || isSniperOverride || isNanoCapOverride;
+            const finalVolCheck = isVolSafe || isHighRROverride || isNanoCapOverride || isX10SqueezeOverride;
+            const finalSLCheck = isSLSafe || isSniperOverride || isNanoCapOverride || isX5SniperOverride;
 
             const isApproved = (isRRSafe && finalRegimeCheck && finalVolCheck && finalSLCheck);
-            
             if (!isApproved || embeddedScore < 6.5) continue; 
 
             const riskMultiplier = Math.max(0.5, Math.min(2.0, (embeddedScore - 5) / 3));
@@ -370,6 +399,8 @@ export default function useMatrixScanner({
             else if (isSniperOverride) overrideTag = '🎯 SNIPER';
             else if (isHighRROverride) overrideTag = '🚀 ASYM-RR';
             else if (isGoldenOverride) overrideTag = '⚡ GOLDEN';
+            else if (isX5SniperOverride) overrideTag = '🎯 X5-SNIPER';
+            else if (isX10SqueezeOverride) overrideTag = '🚀 X10-SQUEEZE';
 
             scanResultsPool.push({
               symbol: targetSymbol,

@@ -497,22 +497,47 @@ BẤT DI BẤT DỊCH:
   const handleMasterAuto = () => { 
     if (!autoData || !vectorRegime) return;
     let dir = vectorRegime.details.l1 === 'Trend Up' ? 'LONG' : 'SHORT'; 
-    let slMult = 1.5, tpMult = 2.0; let execType = 'LIMIT'; let suggestedEntry = autoData.currentPrice;
+    let execType = 'LIMIT'; 
+    let suggestedEntry = autoData.currentPrice;
 
+    // 1. Xác định Hướng (Direction) và Giá vào (Entry) dựa trên Regime
     if (vectorRegime.details.l1 === 'Range' || vectorRegime.details.l2 === 'Extreme') {
-       if (autoData.rsi < 45) dir = 'LONG'; else if (autoData.rsi > 55) dir = 'SHORT'; else { dir = autoData.cmf > 0 ? 'LONG' : 'SHORT'; showToast("⚠️ RSI Vùng nhiễu (Chop Zone). Khởi tạo dự phòng theo Dòng tiền CMF."); }
-       tpMult = 1.5; execType = 'MARKET'; suggestedEntry = autoData.currentPrice; 
+       if (autoData.rsi < 45) dir = 'LONG'; 
+       else if (autoData.rsi > 55) dir = 'SHORT'; 
+       else { 
+           dir = autoData.cmf > 0 ? 'LONG' : 'SHORT'; 
+           showToast("⚠️ RSI Vùng nhiễu (Chop Zone). Khởi tạo dự phòng theo Dòng tiền CMF."); 
+       }
+       execType = 'MARKET'; 
+       suggestedEntry = autoData.currentPrice; 
     } else {
        suggestedEntry = dir === 'LONG' ? autoData.currentPrice - (0.5 * autoData.atr14) : autoData.currentPrice + (0.5 * autoData.atr14);
     }
+
+    // =====================================================================
+    // 2. TÍNH TOÁN TP/SL BẤT ĐỐI XỨNG (SĂN KÈO X5, X10 THEO QUANT CORE)
+    // =====================================================================
+    const isSfp = dir === 'LONG' ? autoData.isBullishSFP : autoData.isBearishSFP;
+    
+    // Gọi hàm từ QuantMath để lấy hệ số nhân TP và SL tự thích nghi
+    const { tpMult, slMult } = QuantMath.dynamicAsymmetricTargets(
+        autoData.bbwRank, 
+        autoData.bbwSlope, 
+        isSfp, 
+        autoData.atrPercent, 
+        autoData.obi, 
+        dir
+    );
+
     const sl = dir === 'LONG' ? suggestedEntry - (slMult * autoData.atr14) : suggestedEntry + (slMult * autoData.atr14);
     const tp1 = dir === 'LONG' ? suggestedEntry + (tpMult * autoData.atr14) : suggestedEntry - (tpMult * autoData.atr14);
 
-    // BẢN VÁ: Đọc chính xác độ dài thập phân của đồng coin hiện tại (tickSize)
+    // 3. Xử lý làm tròn số (Tick Size) chuẩn xác cho sàn Binance
     const tick = tickSizes[symbol] || 0.0001;
     const tickStr = parseFloat(tick).toString();
     const precision = tickStr.includes('e-') ? parseInt(tickStr.split('e-')[1]) : (tickStr.includes('.') ? tickStr.split('.')[1].length : 4);
 
+    // 4. Bơm dữ liệu vào Form
     setTradeSetup(prev => ({ 
       ...prev, 
       direction: dir, 
@@ -522,8 +547,9 @@ BẤT DI BẤT DỊCH:
       tp1: Number(tp1.toFixed(precision)) 
     }));
     
+    // 5. Cảnh báo/Thông báo hiển thị lên HUD
     if (!(autoData.rsi >= 45 && autoData.rsi <= 55 && (vectorRegime.details.l1 === 'Range' || vectorRegime.details.l2 === 'Extreme'))) {
-        showToast("✅ Đã khởi tạo Template động theo TickSize của Binance!");
+        showToast(`✅ AUTO SYNC: Khởi tạo Template Động (SL ${slMult} ATR | TP ${tpMult} ATR)`);
     }
   };
 
