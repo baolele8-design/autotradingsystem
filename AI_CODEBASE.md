@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 09, 2026, 01:34 AM ---
+--- START OF FILE Paste Jul 09, 2026, 01:50 AM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -22,18 +22,24 @@ import OrderForm from './components/terminal/OrderForm';
 import LogicGates from './components/terminal/LogicGates';
 import AiAudit from './components/terminal/AiAudit';
 import TradeJournal from './components/terminal/TradeJournal';
-import { TradeValidator } from './core/TradeValidator';
+import {TradeValidator}  from './core/TradeValidator';
+import useAppStore from './store/useAppStore';
+
 export default function AntiFragileTerminal() {
-  const [symbol, setSymbol] = useState('BTCUSDT');
-  const [intervalTime, setIntervalTime] = useState('15m'); 
+
+  const { 
+    symbol, setSymbol, 
+    intervalTime, setIntervalTime, 
+    mvrvZScore, setMvrvZScore,
+    tradeSetup, setTradeSetup,
+    systemHealth, setSystemHealth 
+  } = useAppStore();
+
   const [toast, setToast] = useState('');
-  const [mvrvZScore, setMvrvZScore] = useState(0.23); 
+
   const [indicatorSpecs, setIndicatorSpecs] = useState({ emaFast: 12, emaSlow: 26, rsiPeriod: 14, bbPeriod: 20, bbStdDev: 2.0 });
 
-  const [tradeSetup, setTradeSetup] = useState({
-    tradeType: 'FUTURES', direction: 'LONG', execution: 'LIMIT', 
-    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0, activeStrategy: "TIÊU CHUẨN" 
-  });
+
 
   const [tradeLogs, setTradeLogs] = useState([]);
   const [tradeStats, setTradeStats] = useState({ totalClosed: 0, winRate: 0, avgWinR: 0, avgLossR: 1, historicalRR: 0, hasEnoughData: false });
@@ -43,7 +49,6 @@ export default function AntiFragileTerminal() {
   const [geminiCooldown, setGeminiCooldown] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const [systemHealth, setSystemHealth] = useState({ weight: 0, maxWeight: 2400, latency: 0 });
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
@@ -158,12 +163,12 @@ export default function AntiFragileTerminal() {
     if (isAltcoinBleeding) l6 += " (Altcoin Bleeding)"; else if (isAltcoinSeason) l6 += " (Altcoin Season)";
 
     return { vector: [l1, l2, l3, l4, l5, l6], details: { l1, l2, l3, l4, l5, l6, mvrvDesc, isAltcoinBleeding, isAltcoinSeason } };
-  }, [autoData, apiMacro, cmcData, mvrvZScore, symbol]);
+  }, [lastUpdated, apiMacro, cmcData, mvrvZScore, symbol]);
 
   const systemScore = useMemo(() => {
     if (!autoData || !apiMacro || !vectorRegime) return { score: 0, synergyText: "", penaltyText: "", checks: {}, w: {} };
     return TradeValidator.evaluateScore(autoData, apiMacro, vectorRegime.details, tradeSetup.direction, mvrvZScore, symbol);
-  }, [autoData, apiMacro, vectorRegime, tradeSetup.direction, mvrvZScore, symbol]);
+  }, [lastUpdated, apiMacro, vectorRegime, tradeSetup.direction, mvrvZScore, symbol]);
 
   const mathCore = useMemo(() => {
     const safeResult = { appliedRiskPercent: 1.0, slPercent: "0.00", riskAmountUSD: "0.00", positionSizeUSD: "0.00", marginUsedUSD: "0.00", suggestedLeverage: 1, theoreticalRR: "0.00", trueEVValue: "0.00", kellyPct: 0, liqEstimate: null, liqSafetyMargin: 0, leverageExceedsExchangeCap: false, dynamicSlDistance: 0, hasMinNotionalError: false, isSizeForcedByExchange: false };
@@ -252,7 +257,7 @@ export default function AntiFragileTerminal() {
        autoData, apiMacro, vectorRegime.details, mathCore, tradeSetup.direction, 
        tradeSetup.tradeType, tradeSetup.entry, tradeSetup.slTech, systemScore, tradeLogs, symbol
     );
-  }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore, tradeLogs]);
+  }, [lastUpdated, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore, tradeLogs]);
 
   const runGeminiAnalysis = async () => {
     if (geminiCooldown > 0 || !autoData || !mathCore || !vectorRegime) return;
@@ -2472,20 +2477,26 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     const wsUrl = `wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`;
     const ws = new WebSocket(wsUrl);
 
+    // Kỹ thuật Throttling (Giảm xung): Chỉ cập nhật state nếu giá thay đổi quá 0.05% để tránh re-render rác
+    let lastRenderedPrice = 0;
+
     ws.onmessage = (event) => {
         if (!isMounted) return;
         const data = JSON.parse(event.data);
         if (data.e === 'markPriceUpdate') {
             const newPrice = parseFloat(data.p);
-            // Cập nhật giá ngay lập tức vào state autoData để Form tính toán Size/EV nảy số liên tục
-            setAutoData(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    currentPrice: newPrice,
-                    atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
-                };
-            });
+            // Chỉ bắt React re-render nếu giá lệch đủ lớn (ví dụ: > 0.05%) HOẶC chưa có giá
+            if (lastRenderedPrice === 0 || Math.abs(newPrice - lastRenderedPrice) / lastRenderedPrice > 0.0005) {
+                lastRenderedPrice = newPrice;
+                setAutoData(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        currentPrice: newPrice,
+                        atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
+                    };
+                });
+            }
         }
     };
 
@@ -2995,7 +3006,37 @@ export const supabase = (supabaseUrl && supabaseKey)
 /// FILE: src\store\useAppStore.js
 =========================================
 
+// FILE: src/store/useAppStore.js
+import { create } from 'zustand';
 
+const useAppStore = create((set) => ({
+  // Dữ liệu cài đặt người dùng
+  symbol: 'BTCUSDT',
+  setSymbol: (sym) => set({ symbol: sym }),
+  
+  intervalTime: '15m',
+  setIntervalTime: (int) => set({ intervalTime: int }),
+  
+  mvrvZScore: 0.23,
+  setMvrvZScore: (z) => set({ mvrvZScore: z }),
+
+  // Cấu hình giao dịch
+  tradeSetup: {
+    tradeType: 'FUTURES', direction: 'LONG', execution: 'LIMIT', 
+    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0, activeStrategy: "TIÊU CHUẨN" 
+  },
+  setTradeSetup: (updater) => set((state) => ({ 
+    tradeSetup: typeof updater === 'function' ? updater(state.tradeSetup) : { ...state.tradeSetup, ...updater } 
+  })),
+
+  // Cấu hình mạng & hệ thống
+  systemHealth: { weight: 0, maxWeight: 2400, latency: 0 },
+  setSystemHealth: (updater) => set((state) => ({
+      systemHealth: typeof updater === 'function' ? updater(state.systemHealth) : { ...state.systemHealth, ...updater }
+  }))
+}));
+
+export default useAppStore;
 
 =========================================
 /// FILE: src\utils\helpers.js
@@ -3215,16 +3256,18 @@ export default async function handler(req, res) {
     "@supabase/supabase-js": "^2.39.0",
     "lucide-react": "^0.300.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
-    "vite": "^5.0.0"
+    "vite": "^7.3.6" 
   }
 }
+
 
 =========================================
 /// FILE: vite.config.js
