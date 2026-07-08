@@ -123,7 +123,6 @@ const QuantMath = {
     return recentMfSum / (recentVolSum || 1);
   },
   
-  // VÁ LỖI: Thêm OBI phạt trượt giá
   costDrag: (entryPrice, tradeType, direction, entryExecution, exitExecution, fundingRate, spreadPercent, holdingCycles = 1, makerFee = 0.0002, takerFee = 0.0004, interval = '1h', obi = 0.5) => { 
     let slippagePenalty = 0;
     if (entryExecution === 'MARKET') {
@@ -200,7 +199,6 @@ const QuantMath = {
       return { fastEmaCurrent, slowEmaCurrent, fastSlope, slowSlope, isCrossBull, isCrossBear, spreadPercent, normFastSlope, normSlowSlope };
   },
   
-  // VÁ LỖI: Buộc có Khối lượng khi bắt SFP
   detectSFP_Advanced: (highs, lows, closes, volumes, avgVolume, direction) => {
     if (!closes || closes.length < 10 || !volumes) return false;
     const triggerIndex = closes.length - 2; 
@@ -209,6 +207,7 @@ const QuantMath = {
     const triggerLow = lows[triggerIndex];
     const triggerVol = volumes[triggerIndex];
 
+    // Bắt buộc Volume phải cao hơn 20% so với trung bình để xác nhận là cá mập quét râu
     if (triggerVol < avgVolume * 1.2) return false;
 
     let lastPivotHigh = -1;
@@ -237,23 +236,18 @@ const QuantMath = {
     }
   },
 
-  // THÊM MỚI: Bắt Target x5, x10
-  // THÊM MỚI: Bắt Target x5, x10 có gắn Tên Chiến Thuật và Noise Buffer
   dynamicAsymmetricTargets: (bbwRank, bbwSlope, isSfp, atrPercent, obi, direction) => {
       let tpMult = 2.0; 
       let slMult = 1.5; 
       let strategyName = "TIÊU CHUẨN (R:R 1:1.3+)";
 
-      // TẬN DỤNG TỐI ĐA atrPercent: Nếu biến động phần trăm quá lớn (>2.0%), nới đệm SL ra 0.2 ATR để tránh bị râu rác quét oan.
       const noiseBuffer = atrPercent > 2.0 ? 0.2 : 0;
 
-      // CHIẾN THUẬT 1: SQUEEZE BREAKOUT (X10)
       if (bbwRank <= 15 && bbwSlope > 10) {
           tpMult = 7.0; 
           slMult = 1.0 + noiseBuffer; 
           strategyName = "🚀 X10 SQUEEZE BREAKOUT";
       }
-      // CHIẾN THUẬT 2: SNIPER LIQUIDITY (X5)
       else if (isSfp) {
           if ((direction === 'LONG' && obi > 0.70) || (direction === 'SHORT' && obi < 0.30)) {
               tpMult = 4.0; 
@@ -261,7 +255,6 @@ const QuantMath = {
               strategyName = "🎯 X5 SNIPER SFP";
           }
       }
-      // CHIẾN THUẬT 3: ORDERBOOK IMBALANCE (X3) - Đánh theo tường Limit siêu dày
       else if (obi > 0.85 || obi < 0.15) {
           tpMult = 3.0;
           slMult = 1.2 + noiseBuffer;

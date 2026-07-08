@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 08, 2026, 01:22 PM ---
+--- START OF FILE Paste Jul 08, 2026, 01:46 PM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -32,7 +32,7 @@ export default function AntiFragileTerminal() {
 
   const [tradeSetup, setTradeSetup] = useState({
     tradeType: 'FUTURES', direction: 'LONG', execution: 'LIMIT', 
-    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0  
+    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0, activeStrategy: "TIÊU CHUẨN" // <-- THÊM activeStrategy
   });
 
   const [tradeLogs, setTradeLogs] = useState([]);
@@ -522,7 +522,8 @@ BẤT DI BẤT DỊCH:
 
     const isSfp = dir === 'LONG' ? autoData.isBullishSFP : autoData.isBearishSFP;
     
-    const { tpMult, slMult } = QuantMath.dynamicAsymmetricTargets(
+    // GỌI HÀM VÀ HỨNG THÊM strategyName
+    const { tpMult, slMult, strategyName } = QuantMath.dynamicAsymmetricTargets(
         autoData.bbwRank, 
         autoData.bbwSlope, 
         isSfp, 
@@ -544,17 +545,23 @@ BẤT DI BẤT DỊCH:
       execution: execType, 
       entry: Number(suggestedEntry.toFixed(precision)), 
       slTech: Number(sl.toFixed(precision)), 
-      tp1: Number(tp1.toFixed(precision)) 
+      tp1: Number(tp1.toFixed(precision)),
+      activeStrategy: strategyName // <-- BƠM TÊN CHIẾN THUẬT VÀO STATE
     }));
     
+    // NÂNG CẤP TOAST THÔNG BÁO
     if (!(autoData.rsi >= 45 && autoData.rsi <= 55 && (vectorRegime.details.l1 === 'Range' || vectorRegime.details.l2 === 'Extreme'))) {
-        showToast(`✅ AUTO SYNC: Khởi tạo Template Động (SL ${slMult} ATR | TP ${tpMult} ATR)`);
+        showToast(`⚡ KÍCH HOẠT: ${strategyName} | SL: ${slMult.toFixed(2)} ATR | TP: ${tpMult.toFixed(1)} ATR`);
     }
   };
 
   const injectScannedSetup = (setup) => {
     setSymbol(setup.symbol); setIntervalTime(setup.interval);
-    setTradeSetup(prev => ({ ...prev, direction: setup.direction, entry: setup.entry, slTech: setup.slTech, tp1: setup.tp1 }));
+    setTradeSetup(prev => ({ 
+        ...prev, direction: setup.direction, entry: setup.entry, 
+        slTech: setup.slTech, tp1: setup.tp1, 
+        activeStrategy: setup.overrideTag || "TIÊU CHUẨN" // <-- NHẬN TAG TỪ SCANNER
+    }));
     showToast(`🚀 Đã nạp cấu trúc ${setup.symbol} [${setup.interval}] lên tổng đài chỉ huy!`);
   };
 
@@ -1220,7 +1227,23 @@ export default function OrderForm({
 
         <div className={`bg-gradient-to-br p-4 rounded-lg border flex flex-col justify-between shadow-inner relative transition-colors ${mathCore.hasMinNotionalError ? 'from-red-950/40 to-[#0a0a0c] border-red-900/50' : mathCore.isSizeForcedByExchange ? 'from-amber-950/30 to-[#0a0a0c] border-amber-900/50' : 'from-slate-900 to-[#0a0a0c] border-slate-800'}`}>
           <div className="absolute top-2 right-2 text-[8px] text-slate-600 font-bold border border-slate-800 px-1.5 py-0.5 rounded uppercase">Định Cỡ Vị Thế</div>
-          <div className="space-y-3 mt-4">
+          
+          {/* GIAO DIỆN MỚI: HIỂN THỊ TÊN CHIẾN THUẬT ĐANG KÍCH HOẠT */}
+          <div className="mt-2 mb-1 flex items-center justify-between border-b border-slate-800 pb-2">
+             <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                 <Target className="w-3.5 h-3.5 text-blue-500" /> CHIẾN THUẬT AUTO:
+             </span>
+             <span className={`text-[10px] font-black px-2 py-0.5 rounded border animate-pulse shadow-lg
+                 ${tradeSetup.activeStrategy?.includes('X10') ? 'bg-pink-900/30 text-pink-400 border-pink-500/50' 
+                 : tradeSetup.activeStrategy?.includes('X5') ? 'bg-amber-900/30 text-amber-400 border-amber-500/50'
+                 : tradeSetup.activeStrategy?.includes('X3') ? 'bg-cyan-900/30 text-cyan-400 border-cyan-500/50'
+                 : 'bg-slate-900 text-slate-400 border-slate-700'}`}>
+                 {tradeSetup.activeStrategy || "TIÊU CHUẨN"}
+             </span>
+          </div>
+
+          <div className="space-y-3 mt-2">
+            {/* Giữ nguyên các phần Khối lượng (Size USD) bên dưới... */}
             <div className="flex justify-between items-end border-b border-slate-800 pb-1.5">
               <span className="text-[10px] font-bold text-slate-500">Khối lượng (Size USD):</span>
               <span className={`font-mono text-xs font-black ${mathCore.hasMinNotionalError ? 'text-red-500 animate-pulse' : mathCore.isSizeForcedByExchange ? 'text-amber-400' : 'text-white'}`}>
@@ -1846,22 +1869,37 @@ const QuantMath = {
   },
 
   // THÊM MỚI: Bắt Target x5, x10
+  // THÊM MỚI: Bắt Target x5, x10 có gắn Tên Chiến Thuật và Noise Buffer
   dynamicAsymmetricTargets: (bbwRank, bbwSlope, isSfp, atrPercent, obi, direction) => {
       let tpMult = 2.0; 
       let slMult = 1.5; 
+      let strategyName = "TIÊU CHUẨN (R:R 1:1.3+)";
 
+      // TẬN DỤNG TỐI ĐA atrPercent: Nếu biến động phần trăm quá lớn (>2.0%), nới đệm SL ra 0.2 ATR để tránh bị râu rác quét oan.
+      const noiseBuffer = atrPercent > 2.0 ? 0.2 : 0;
+
+      // CHIẾN THUẬT 1: SQUEEZE BREAKOUT (X10)
       if (bbwRank <= 15 && bbwSlope > 10) {
           tpMult = 7.0; 
-          slMult = 1.0; 
+          slMult = 1.0 + noiseBuffer; 
+          strategyName = "🚀 X10 SQUEEZE BREAKOUT";
       }
-      
-      if (isSfp) {
-          if ((direction === 'LONG' && obi > 0.75) || (direction === 'SHORT' && obi < 0.25)) {
+      // CHIẾN THUẬT 2: SNIPER LIQUIDITY (X5)
+      else if (isSfp) {
+          if ((direction === 'LONG' && obi > 0.70) || (direction === 'SHORT' && obi < 0.30)) {
               tpMult = 4.0; 
-              slMult = 0.6; 
+              slMult = 0.6 + (noiseBuffer / 2); 
+              strategyName = "🎯 X5 SNIPER SFP";
           }
       }
-      return { tpMult, slMult };
+      // CHIẾN THUẬT 3: ORDERBOOK IMBALANCE (X3) - Đánh theo tường Limit siêu dày
+      else if (obi > 0.85 || obi < 0.15) {
+          tpMult = 3.0;
+          slMult = 1.2 + noiseBuffer;
+          strategyName = "🐳 WHALE IMBALANCE (X3)";
+      }
+
+      return { tpMult, slMult, strategyName };
   },
 
   estimateLiquidation: (notionalUSD, leverage, entry, direction, brackets) => {
