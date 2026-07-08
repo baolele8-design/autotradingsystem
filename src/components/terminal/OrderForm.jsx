@@ -96,7 +96,7 @@ export default function OrderForm({
                 batchOrders: batch
             };
 
-            const LOCAL_BRIDGE_URL = 'http://192.168.1.60:1337/api/execute-batch';
+            const LOCAL_BRIDGE_URL = 'http://localhost:1337/api/execute-batch';
             
             const res = await fetch(LOCAL_BRIDGE_URL, {
                 method: 'POST',

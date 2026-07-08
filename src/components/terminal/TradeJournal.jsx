@@ -55,7 +55,7 @@ export default function TradeJournal({ tradeLogs, currentPrice, syncBinanceToSup
     try {
       if (log.status === 'PENDING') {
         // Gửi lệnh Cancel tới Local Bridge kèm theo các mốc giá để nhắm bắn chính xác
-        const LOCAL_BRIDGE_URL = 'http://192.168.1.60:1337/api/cancel-smart';
+        const LOCAL_BRIDGE_URL = 'http://localhost:1337/api/cancel-smart';
         const cancelRes = await fetch(LOCAL_BRIDGE_URL, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },

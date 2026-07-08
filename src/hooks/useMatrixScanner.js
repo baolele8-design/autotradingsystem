@@ -100,7 +100,7 @@ export default function useMatrixScanner({
 
         const fetchCache = new Map();
         const memoizedFetch = async (binanceQueryStr) => {
-            const fullUrl = `/api/binance?${binanceQueryStr}&t=${ts}`;
+            const fullUrl = [http://192.168.1.60:1337/api/binance?$](http://192.168.1.60:1337/api/binance?$){binanceQueryStr};
             if (fetchCache.has(fullUrl)) return fetchCache.get(fullUrl);
             await new Promise(res => setTimeout(res, Math.random() * 1500));
             const promise = fetchWithTimeout(fullUrl, 15000);
