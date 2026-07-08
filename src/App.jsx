@@ -16,18 +16,24 @@ import OrderForm from './components/terminal/OrderForm';
 import LogicGates from './components/terminal/LogicGates';
 import AiAudit from './components/terminal/AiAudit';
 import TradeJournal from './components/terminal/TradeJournal';
-import { TradeValidator } from './core/TradeValidator';
+import {TradeValidator}  from './core/TradeValidator';
+import useAppStore from './store/useAppStore';
+
 export default function AntiFragileTerminal() {
-  const [symbol, setSymbol] = useState('BTCUSDT');
-  const [intervalTime, setIntervalTime] = useState('15m'); 
+
+  const { 
+    symbol, setSymbol, 
+    intervalTime, setIntervalTime, 
+    mvrvZScore, setMvrvZScore,
+    tradeSetup, setTradeSetup,
+    systemHealth, setSystemHealth 
+  } = useAppStore();
+
   const [toast, setToast] = useState('');
-  const [mvrvZScore, setMvrvZScore] = useState(0.23); 
+
   const [indicatorSpecs, setIndicatorSpecs] = useState({ emaFast: 12, emaSlow: 26, rsiPeriod: 14, bbPeriod: 20, bbStdDev: 2.0 });
 
-  const [tradeSetup, setTradeSetup] = useState({
-    tradeType: 'FUTURES', direction: 'LONG', execution: 'LIMIT', 
-    riskPercent: 1.0, entry: 0, slTech: 0, tp1: 0, activeStrategy: "TIÊU CHUẨN" 
-  });
+
 
   const [tradeLogs, setTradeLogs] = useState([]);
   const [tradeStats, setTradeStats] = useState({ totalClosed: 0, winRate: 0, avgWinR: 0, avgLossR: 1, historicalRR: 0, hasEnoughData: false });
@@ -37,7 +43,6 @@ export default function AntiFragileTerminal() {
   const [geminiCooldown, setGeminiCooldown] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const [systemHealth, setSystemHealth] = useState({ weight: 0, maxWeight: 2400, latency: 0 });
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
 
@@ -152,12 +157,12 @@ export default function AntiFragileTerminal() {
     if (isAltcoinBleeding) l6 += " (Altcoin Bleeding)"; else if (isAltcoinSeason) l6 += " (Altcoin Season)";
 
     return { vector: [l1, l2, l3, l4, l5, l6], details: { l1, l2, l3, l4, l5, l6, mvrvDesc, isAltcoinBleeding, isAltcoinSeason } };
-  }, [autoData, apiMacro, cmcData, mvrvZScore, symbol]);
+  }, [lastUpdated, apiMacro, cmcData, mvrvZScore, symbol]);
 
   const systemScore = useMemo(() => {
     if (!autoData || !apiMacro || !vectorRegime) return { score: 0, synergyText: "", penaltyText: "", checks: {}, w: {} };
     return TradeValidator.evaluateScore(autoData, apiMacro, vectorRegime.details, tradeSetup.direction, mvrvZScore, symbol);
-  }, [autoData, apiMacro, vectorRegime, tradeSetup.direction, mvrvZScore, symbol]);
+  }, [lastUpdated, apiMacro, vectorRegime, tradeSetup.direction, mvrvZScore, symbol]);
 
   const mathCore = useMemo(() => {
     const safeResult = { appliedRiskPercent: 1.0, slPercent: "0.00", riskAmountUSD: "0.00", positionSizeUSD: "0.00", marginUsedUSD: "0.00", suggestedLeverage: 1, theoreticalRR: "0.00", trueEVValue: "0.00", kellyPct: 0, liqEstimate: null, liqSafetyMargin: 0, leverageExceedsExchangeCap: false, dynamicSlDistance: 0, hasMinNotionalError: false, isSizeForcedByExchange: false };
@@ -246,7 +251,7 @@ export default function AntiFragileTerminal() {
        autoData, apiMacro, vectorRegime.details, mathCore, tradeSetup.direction, 
        tradeSetup.tradeType, tradeSetup.entry, tradeSetup.slTech, systemScore, tradeLogs, symbol
     );
-  }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore, tradeLogs]);
+  }, [lastUpdated, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore, tradeLogs]);
 
   const runGeminiAnalysis = async () => {
     if (geminiCooldown > 0 || !autoData || !mathCore || !vectorRegime) return;

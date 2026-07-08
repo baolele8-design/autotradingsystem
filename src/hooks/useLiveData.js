@@ -281,20 +281,26 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     const wsUrl = `wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`;
     const ws = new WebSocket(wsUrl);
 
+    // Kỹ thuật Throttling (Giảm xung): Chỉ cập nhật state nếu giá thay đổi quá 0.05% để tránh re-render rác
+    let lastRenderedPrice = 0;
+
     ws.onmessage = (event) => {
         if (!isMounted) return;
         const data = JSON.parse(event.data);
         if (data.e === 'markPriceUpdate') {
             const newPrice = parseFloat(data.p);
-            // Cập nhật giá ngay lập tức vào state autoData để Form tính toán Size/EV nảy số liên tục
-            setAutoData(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    currentPrice: newPrice,
-                    atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
-                };
-            });
+            // Chỉ bắt React re-render nếu giá lệch đủ lớn (ví dụ: > 0.05%) HOẶC chưa có giá
+            if (lastRenderedPrice === 0 || Math.abs(newPrice - lastRenderedPrice) / lastRenderedPrice > 0.0005) {
+                lastRenderedPrice = newPrice;
+                setAutoData(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        currentPrice: newPrice,
+                        atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
+                    };
+                });
+            }
         }
     };
 

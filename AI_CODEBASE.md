@@ -1,4 +1,4 @@
---- START OF FILE Paste Jul 08, 2026, 10:46 PM ---
+--- START OF FILE Paste Jul 09, 2026, 01:34 AM ---
 
 =========================================
 /// FILE: src\App.jsx
@@ -22,7 +22,7 @@ import OrderForm from './components/terminal/OrderForm';
 import LogicGates from './components/terminal/LogicGates';
 import AiAudit from './components/terminal/AiAudit';
 import TradeJournal from './components/terminal/TradeJournal';
-
+import { TradeValidator } from './core/TradeValidator';
 export default function AntiFragileTerminal() {
   const [symbol, setSymbol] = useState('BTCUSDT');
   const [intervalTime, setIntervalTime] = useState('15m'); 
@@ -162,49 +162,7 @@ export default function AntiFragileTerminal() {
 
   const systemScore = useMemo(() => {
     if (!autoData || !apiMacro || !vectorRegime) return { score: 0, synergyText: "", penaltyText: "", checks: {}, w: {} };
-    
-    const { l1, l2, l6, isAltcoinBleeding, isAltcoinSeason } = vectorRegime.details;
-    let w = { s1: 2.0, s2: 1.5, s3: 1.5, s4: 1.0, s5: 1.0, s6: 1.5, s7: 1.0, s8: 1.5 }; 
-    if (l1 === 'Range') { w = { s1: 0, s2: 1.5, s3: 4.0, s4: 2.0, s5: 1.5, s6: 1.0, s7: 1.0, s8: 1.0 }; } 
-    else if (l2 === 'Extreme') { w = { s1: 0, s2: 1.0, s3: 3.5, s4: 2.5, s5: 1.5, s6: 2.0, s7: 1.5, s8: 0.5 }; } 
-    else if (l1.includes('Trend') && l2 === 'Expansion') { w = { s1: 3.0, s2: 2.5, s3: 0, s4: 1.0, s5: 1.0, s6: 2.5, s7: 1.0, s8: 2.0 }; }
-
-    const isVolSpikeHUD = autoData.lastClosedVolume > (autoData.avgVolume20 * 2.5);
-
-    const checkS1 = tradeSetup.direction === (l1 === 'Trend Up' ? 'LONG' : 'SHORT');
-    const checkS2 = tradeSetup.direction === 'LONG' ? autoData.cmf > 0.05 : autoData.cmf < -0.05;
-    const checkS3 = tradeSetup.direction === 'LONG' ? autoData.isBullishSFP : autoData.isBearishSFP;
-    const checkS4 = tradeSetup.direction === 'LONG' ? (l1.includes('Trend') ? autoData.rsi < 65 : autoData.rsi < 40) : (l1.includes('Trend') ? autoData.rsi > 35 : autoData.rsi > 60); 
-    const checkS5 = tradeSetup.direction === 'LONG' ? apiMacro.longShortRatio < 1.0 : apiMacro.longShortRatio > 1.0; 
-    const checkS6 = tradeSetup.direction === 'LONG' ? (apiMacro.takerBuySellRatio > 1.05 && !autoData.isObvBearDivergence) : (apiMacro.takerBuySellRatio < 0.95 && !autoData.isObvBullDivergence);
-    
-    // VÁ LỖI ĐỒNG BỘ: Sửa isOiSpiking thành isVolSpikeHUD để khớp với Scanner
-    const checkS7 = tradeSetup.direction === 'LONG' ? (autoData.fundingRate < 0 && isVolSpikeHUD) : (autoData.fundingRate > 0 && isVolSpikeHUD);
-    const checkS8 = tradeSetup.direction === 'LONG' ? (autoData.currentPrice > autoData.htfSma200 && autoData.ema200.slope > 0) : (autoData.currentPrice < autoData.htfSma200 && autoData.ema200.slope < 0);
-
-    let score = 0; if (checkS1) score += w.s1; if (checkS2) score += w.s2; if (checkS3) score += w.s3; if (checkS4) score += w.s4; if (checkS5) score += w.s5; if (checkS6) score += w.s6; if (checkS7) score += w.s7; if (checkS8) score += w.s8;
-
-    let synergyText = "";
-    if (l2 === 'Compression' && checkS2 && checkS6) { score += 2.0; synergyText += "[💣 The Spring: CMF/Taker Accumulation in Compression] "; }
-    if (l2 === 'Extreme' && checkS3 && checkS4) { score += 2.0; synergyText += "[🩸 Capitulation Sweep: SFP + Extreme RSI Divergence] "; }
-    if (isVolSpikeHUD && !checkS5 && checkS6) { score += 1.5; synergyText += "[🪤 Smart Money Trap: Retail piling into liquidity wall] "; }
-    if (tradeSetup.direction === 'LONG' && isAltcoinSeason) { score += 1.0; synergyText += "[🌊 Macro Tailwind: Altcoin Season] "; }
-
-    const isTripleTrendBull = autoData.ema20.slope > 0 && autoData.ema50.slope > 0 && autoData.ema200.slope > 0;
-    const isTripleTrendBear = autoData.ema20.slope < 0 && autoData.ema50.slope < 0 && autoData.ema200.slope < 0;
-    if ((tradeSetup.direction === 'LONG' && isTripleTrendBull) || (tradeSetup.direction === 'SHORT' && isTripleTrendBear)) { score += 1.5; synergyText += "[🚅 Triple-Engine: Hợp lưu gia tốc 3 mốc EMA] "; }
-    if (autoData.adx > 35 && checkS6) { score += 1.5; synergyText += "[🌪️ ADX Squeeze: Taker chủ động xả đạn vào Siêu Trend (ADX>35)] "; }
-    if ((tradeSetup.direction === 'LONG' && mvrvZScore < 1.0 && checkS3) || (tradeSetup.direction === 'SHORT' && mvrvZScore > 2.5 && checkS3)) { score += 1.5; synergyText += "[💎 Deep Value Sweep: Quét SFP tại Vùng định giá Vĩ mô] "; }
-    
-    if (l2 === 'Compression' && autoData.bbwSlope > 10) { score += 2.0; synergyText += "[🧨 Volatility Expansion: Gia tốc Nén BBW ngóc đầu] "; }
-    if (l2 === 'Compression' && ((tradeSetup.direction === 'LONG' && autoData.obi > 0.7 && checkS6) || (tradeSetup.direction === 'SHORT' && autoData.obi < 0.3 && checkS6))) { score += 2.0; synergyText += "[🐳 Whale Accumulation: OBI Imbalance tại vùng nén] "; }
-
-    let penaltyText = "";
-    if (tradeSetup.direction === 'LONG' && isAltcoinBleeding) { score -= 2.0; penaltyText += "[-2.0 Macro Gravity: Altcoins are bleeding to BTC] "; }
-    if (tradeSetup.direction === 'LONG' && l6.includes('Overvaluation')) { score -= 1.5; penaltyText += "[-1.5 MVRV Gravity: Buying into Overvaluation] "; }
-    if (tradeSetup.direction === 'SHORT' && l6.includes('Undervaluation')) { score -= 1.5; penaltyText += "[-1.5 MVRV Gravity: Shorting the On-chain Bottom] "; }
-
-    return { score, synergyText, penaltyText, checks: { checkS1, checkS2, checkS3, checkS4, checkS5, checkS6, checkS7, checkS8 }, w };
+    return TradeValidator.evaluateScore(autoData, apiMacro, vectorRegime.details, tradeSetup.direction, mvrvZScore, symbol);
   }, [autoData, apiMacro, vectorRegime, tradeSetup.direction, mvrvZScore, symbol]);
 
   const mathCore = useMemo(() => {
@@ -243,15 +201,23 @@ export default function AntiFragileTerminal() {
     let positionSizeUSD = riskAmountUSD / slPercentForSize; 
     if (!isFinite(positionSizeUSD) || isNaN(positionSizeUSD)) positionSizeUSD = 0;
 
-    const targetMinThreshold = dynamicMinNotionals[symbol] || 5.0; 
-    let hasMinNotionalError = false; let isSizeForcedByExchange = false;
-    
-    if (positionSizeUSD > 0 && positionSizeUSD < targetMinThreshold) {
-        positionSizeUSD = targetMinThreshold; isSizeForcedByExchange = true;
-        const newRiskUSD = positionSizeUSD * slPercentForSize; riskAmountUSD = newRiskUSD;
-        if (newRiskUSD > capitalSafe * 0.05) hasMinNotionalError = true;
-    }
-
+    // SỬA CƠ CHẾ CHẶN RISK KHI BỊ SÀN ÉP SIZE (mathCore)
+      
+      const targetMinThreshold = dynamicMinNotionals[symbol] || 5.0; 
+      let hasMinNotionalError = false; let isSizeForcedByExchange = false;
+      
+      if (positionSizeUSD > 0 && positionSizeUSD < targetMinThreshold) {
+          positionSizeUSD = targetMinThreshold; 
+          isSizeForcedByExchange = true;
+          const newRiskUSD = positionSizeUSD * slPercentForSize; 
+          riskAmountUSD = newRiskUSD;
+          
+          // HẠ NGƯỠNG CHẶN CỨNG TỪ 5% XUỐNG 2.5% VỐN
+          // Nếu sàn ép size làm risk vượt quá 2.5% vốn, khóa mẹnh lập tức.
+          if (newRiskUSD > capitalSafe * 0.025) {
+              hasMinNotionalError = true;
+          }
+      }
     let suggestedLeverage = 1; let marginUsedUSD = positionSizeUSD;
     if (tradeSetup.tradeType === 'FUTURES') {
        let minRequiredLev = positionSizeUSD / (capitalSafe * 0.9 || 1);
@@ -282,62 +248,11 @@ export default function AntiFragileTerminal() {
 
   const logicGates = useMemo(() => {
     if (!autoData || !mathCore || !vectorRegime) return { hardGates: [], softGates: [], softScore: 0, isApproved: false };
-    
-    const { l1, l2, l3 } = vectorRegime.details;
-    const { score, synergyText, penaltyText, checks, w } = systemScore;
-    const requiredRR = autoData.bbwRank > 80 ? 1.5 : 1.2;
-
-    const hardGates = [
-      { id: 'h1', passed: apiMacro.realSpreadPct < 0.2 && tradeSetup.slTech > 0 && Math.abs(tradeSetup.entry - tradeSetup.slTech) > (autoData.atr14 * 0.5), text: `CHỐNG NHIỄU: Khoảng cách SL kỹ thuật > 0.5 ATR (${(autoData.atr14 * 0.5).toFixed(2)}$)` },
-      { id: 'h2', passed: parseFloat(mathCore.theoreticalRR) >= requiredRR, text: `KỲ VỌNG EV (Tự thích nghi): Tỷ lệ R:R ròng >= ${requiredRR} (BBW Rank: P${autoData.bbwRank.toFixed(0)})` },
-      { id: 'h3_1', passed: l1 !== 'Transition', text: `REGIME LOCK: Xu hướng rõ ràng (L1 không nằm trong pha Chuyển giao - Transition).` },
-      { id: 'h3_2', passed: l2 !== 'Compression', text: `VOLATILITY LOCK: Không giao dịch trong vùng Nén thanh khoản (L2 không phải Compression).` },
-      { id: 'h4', passed: tradeSetup.tradeType === 'SPOT' || (mathCore.liqEstimate && !mathCore.leverageExceedsExchangeCap && mathCore.liqSafetyMargin >= 1.3), text: `ĐỆM THANH LÝ: Liq Price cách xa SL Thực tế > 30% (Thực tế: ${mathCore.liqEstimate ? (mathCore.liqSafetyMargin*100).toFixed(0)+'%' : 'N/A'})` },
-      { id: 'h5', passed: !mathCore.hasMinNotionalError, text: `MIN NOTIONAL: Lệnh $${mathCore.positionSizeUSD} (Risk thực bị ép: $${mathCore.riskAmountUSD} <= 5% Vốn).` },
-      { id: 'h6', passed: autoData.lastClosedVolume >= (autoData.avgVolume20 * 0.4), text: `VOL DEADZONE: Thanh khoản nến đóng > 40% trung bình 20 nến (Vol thực: ${autoData.lastClosedVolume.toFixed(2)}).` }
-    ];
-
-    const softGates = [
-      { id: 's1', passed: checks.checkS1, weight: w.s1, text: `CẤU TRÚC L1 (+${w.s1}): Thuận xu hướng ${l1}.` },
-      { id: 's2', passed: checks.checkS2, weight: w.s2, text: `DÒNG TIỀN CMF (+${w.s2}): Áp lực Quote Volume bơm/xả hỗ trợ.` },
-      { id: 's3', passed: checks.checkS3, weight: w.s3, text: `SĂN THANH KHOẢN (+${w.s3}): Cấu trúc Swing Failure Pattern hợp lệ.` },
-      { id: 's4', passed: checks.checkS4, weight: w.s4, text: `ĐỘNG LƯỢNG (+${w.s4}): Động lượng RSI bảo vệ (Không rướn).` },
-      { id: 's5', passed: checks.checkS5, weight: w.s5, text: `TÂM LÝ (+${w.s5}): Đi ngược Đám đông (Account L/S Ratio).` },
-      { id: 's6', passed: checks.checkS6, weight: w.s6, text: `ORDER FLOW (+${w.s6}): Taker Volume xả/gom & Phân kỳ OBV.` },
-      { id: 's7', passed: checks.checkS7, weight: w.s7, text: `SQUEEZE (+${w.s7}): Tận dụng OI Spiking & Funding Rate nghịch.` },
-      { id: 's8', passed: checks.checkS8, weight: w.s8, text: `HỢP LƯU VĨ MÔ (+${w.s8}): Thuận sóng dài hạn (Giá & Slope SMA200).` }
-    ];
-
-    if (synergyText) softGates.push({ id: 's_syn', passed: true, weight: 0, text: `🔥 SYNERGY BONUS: ${synergyText}` });
-    if (penaltyText) softGates.push({ id: 's_pen', passed: false, weight: 0, text: `⚠️ MACRO PENALTY: ${penaltyText}` });
-
-    const hardPassed = hardGates.every(g => g.passed);
-    const failedGates = hardGates.filter(g => !g.passed);
-    const isOnlyRegimeFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h3_2');
-    const isSafeFromKnife = tradeSetup.direction === 'LONG' ? (autoData.cmf > 0.15 && autoData.rsi > 35) : (autoData.cmf < -0.15 && autoData.rsi < 65);
-    const isGoldenOverride = isOnlyRegimeFailed && (score >= 8.5) && synergyText !== "" && isSafeFromKnife;
-    
-    const isOnlySLFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h1');
-    const isSniperOverride = isOnlySLFailed && checks.checkS3 && score >= 7.0;
-
-    const isOnlyVolFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h6');
-    const isHighRROverride = isOnlyVolFailed && parseFloat(mathCore.theoreticalRR) >= 2.5 && score >= 7.0;
-
-    // VÁ LỖI ĐỒNG BỘ: Không bắt buộc isOiSpiking cho NanoCap nữa để khớp Scanner
-    const isNanoCapSniper = 
-      parseFloat(mathCore.theoreticalRR) >= 2.5 && 
-      (l2 === 'Compression' || l3.includes('SFP') || l3.includes('Squeeze Imminent') || (tradeSetup.direction === 'LONG' && autoData.obi > 0.7) || (tradeSetup.direction === 'SHORT' && autoData.obi < 0.3)) &&
-      !mathCore.hasMinNotionalError && score >= 7.0;
-
-    const isNanoOverride = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h6') && isNanoCapSniper;
-
-    const isApproved = (hardPassed || isGoldenOverride || isSniperOverride || isHighRROverride || isNanoOverride) && (score >= 6.5); 
-    
-    return { 
-      hardGates, softGates, softScore: score, isApproved, 
-      isGoldenOverride, isSniperOverride, isHighRROverride, isNanoOverride
-    };
-  }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore]);
+    return TradeValidator.evaluateGates(
+       autoData, apiMacro, vectorRegime.details, mathCore, tradeSetup.direction, 
+       tradeSetup.tradeType, tradeSetup.entry, tradeSetup.slTech, systemScore, tradeLogs, symbol
+    );
+  }, [autoData, mathCore, tradeSetup, apiMacro, vectorRegime, symbol, systemScore, tradeLogs]);
 
   const runGeminiAnalysis = async () => {
     if (geminiCooldown > 0 || !autoData || !mathCore || !vectorRegime) return;
@@ -420,27 +335,74 @@ BẤT DI BẤT DỊCH:
   const handleSaveTradeLog = async () => {
     if (!supabase) return;
     try {
+      // 1. TẠO JSON SIÊU NHẸ: Chỉ lưu những thông số râu ria không cần Query vào Database
+      const compressedAutoData = {
+          currentPrice: autoData.currentPrice,
+          atrPercent: autoData.atrPercent,
+          atrRank: autoData.atrRank,
+          bbw: autoData.bbw,
+          isOiSpiking: autoData.isOiSpiking,
+          isBullishSFP: autoData.isBullishSFP,
+          isBearishSFP: autoData.isBearishSFP,
+          btcDomValue: autoData.btcDomValue,
+          ema20Slope: autoData.ema20.slope,
+          ema50Slope: autoData.ema50.slope,
+          ema200Slope: autoData.ema200.slope
+      };
+
       const fullSystemContext = {
          vector_details: vectorRegime.details,
-         auto_data: autoData,
-         math_core: mathCore,
+         auto_data: compressedAutoData, // Đã gọt sạch RSI, ADX, CMF, Funding... vì sẽ ném ra cột riêng
+         math_core: {
+            suggestedLeverage: mathCore.suggestedLeverage,
+            liqEstimate: mathCore.liqEstimate,
+            kellyPct: mathCore.kellyPct,
+            trueEVValue: mathCore.trueEVValue
+         },
          api_macro: apiMacro
       };
 
+      // 2. PAYLOAD CẤP 1 (FLATTENED COLUMNS): Phục vụ Query Database siêu tốc
       const payload = {
-        symbol, interval: intervalTime, type: tradeSetup.tradeType, direction: tradeSetup.direction,
-        entry: parseFloat(tradeSetup.entry), sl: parseFloat(tradeSetup.slTech), tp_1_price: parseFloat(tradeSetup.tp1), tp_2_price: null, 
-        risk_amount_usd: Math.max(0.1, parseFloat(mathCore.riskAmountUSD)), rr: parseFloat(mathCore.theoreticalRR),
-        adx: parseFloat(autoData.adx), atr: parseFloat(autoData.atr14), funding_rate: parseFloat(autoData.fundingRate),
-        oi_spiking: autoData.isOiSpiking, fgi: parseFloat(apiMacro.fgiValue),
-        trend_sma200: autoData.currentPrice > autoData.htfSma200 ? 'UP' : 'DOWN', leverage: parseFloat(mathCore.suggestedLeverage), 
+        symbol, 
+        interval: intervalTime, 
+        type: tradeSetup.tradeType, 
+        direction: tradeSetup.direction,
+        entry: parseFloat(tradeSetup.entry), 
+        sl: parseFloat(tradeSetup.slTech), 
+        tp_1_price: parseFloat(tradeSetup.tp1), 
+        tp_2_price: null, 
+        risk_amount_usd: Math.max(0.1, parseFloat(mathCore.riskAmountUSD)), 
+        position_size_usd: parseFloat(mathCore.positionSizeUSD), // TRƯỜNG MỚI ĐƯỢC TÁCH
+        rr: parseFloat(mathCore.theoreticalRR),
+        
+        // --- CHỈ BÁO KỸ THUẬT RÃ PHẲNG ---
+        adx: parseFloat(autoData.adx), 
+        atr: parseFloat(autoData.atr14), 
+        rsi: parseFloat(autoData.rsi), // TRƯỜNG MỚI ĐƯỢC TÁCH
+        cmf: parseFloat(autoData.cmf), 
+        bbw_rank: parseInt(autoData.bbwRank), 
+        oi_delta: parseFloat(autoData.oiDelta || 0), 
+        funding_rate: parseFloat(autoData.fundingRate),
+        funding_slope: parseFloat(autoData.fundingSlope || 0), 
+        taker_ratio: parseFloat(apiMacro.takerBuySellRatio || 1), 
+        btc_dom_slope: parseFloat(autoData.btcDomSlope || 0), // TRƯỜNG MỚI ĐƯỢC TÁCH
+        mvrv: parseFloat(mvrvZScore), 
+        fgi: parseInt(apiMacro.fgiValue),
+        // ---------------------------------
+
+        trend_sma200: autoData.currentPrice > autoData.htfSma200 ? 'UP' : 'DOWN', 
+        leverage: parseFloat(mathCore.suggestedLeverage), 
         status: 'PENDING', 
-        pnl_usd: 0, session: apiMacro.tradingSession, market_regime: vectorRegime.vector.join(' | '), bbw_rank: parseFloat(autoData.bbwRank), 
-        cmf: parseFloat(autoData.cmf), ai_advice: aiAnalysis ? aiAnalysis.substring(0, 3000) : null, mvrv: parseFloat(mvrvZScore), 
-        oi_delta: parseFloat(autoData.oiDelta || 0), taker_ratio: parseFloat(apiMacro.takerBuySellRatio || 1), 
-        funding_slope: parseFloat(autoData.fundingSlope || 0), soft_score: parseFloat(logicGates.softScore), 
-        holding_cycles: 1, applied_risk_pct: parseFloat(mathCore.appliedRiskPercent),
-        meta_data: fullSystemContext 
+        pnl_usd: 0, 
+        session: apiMacro.tradingSession, 
+        market_regime: vectorRegime.vector.join(' | '), 
+        ai_advice: aiAnalysis ? aiAnalysis.substring(0, 3000) : null, 
+        soft_score: parseFloat(logicGates.softScore), 
+        holding_cycles: 1, 
+        applied_risk_pct: parseFloat(mathCore.appliedRiskPercent),
+        
+        meta_data: fullSystemContext // JSON Rác đã được nén tối đa
       };
       
       const { error } = await supabase.from('trade_logs').insert([payload]);
@@ -449,57 +411,125 @@ BẤT DI BẤT DỊCH:
     } catch (e) { showToast(`❌ Lỗi Supabase: ${e.message}`); }
   };
 
+  // THAY THẾ HÀM syncBinanceToSupabase (Dòng ~300 trong src/App.jsx)
   const syncBinanceToSupabase = async () => {
-    if (!supabase || !binancePositions) return;
+    if (!supabase || !tradeLogs || tradeLogs.length === 0) return;
     setIsSyncing(true);
     
     try {
-      const activeLogs = tradeLogs.filter(log => log.status === 'OPEN' || log.status === 'PENDING');
-      if (activeLogs.length === 0) {
-        showToast("✅ Sổ tay không có lệnh OPEN/PENDING nào cần đồng bộ.");
-        setIsSyncing(false); return;
-      }
+      showToast("🔄 Đang khởi chạy Thuật toán Đối soát Sổ cái Lượng tử (Ledger Reconciliation)...");
+      
+      // 1. Tách danh sách các đồng Coin (Symbols) duy nhất có trong 300 lệnh gần nhất của Sổ tay
+      const uniqueSymbols = [...new Set(tradeLogs.map(log => log.symbol))];
+      let updatedCount = 0;
+      const ts = Date.now();
 
-      for (const log of activeLogs) {
-        const currentPosition = binancePositions.find(p => p.symbol === log.symbol);
-        const positionAmt = currentPosition ? parseFloat(currentPosition.positionAmt) : 0;
+      // 2. Chạy đối soát từng Đồng Coin một (Group by Symbol)
+      for (const sym of uniqueSymbols) {
+          // Sắp xếp các lệnh của đồng coin này theo dòng thời gian (Cũ -> Mới)
+          const symLogs = tradeLogs.filter(l => l.symbol === sym).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          
+          const currentPosition = binancePositions?.find(p => p.symbol === sym);
+          const positionAmt = currentPosition ? parseFloat(currentPosition.positionAmt) : 0;
 
-        if (log.status === 'PENDING') {
-           if (positionAmt !== 0) {
-              const realEntry = parseFloat(currentPosition.entryPrice);
-              await supabase.from('trade_logs').update({ status: 'OPEN', entry: realEntry }).eq('id', log.id);
-              showToast(`🔗 Đã liên kết lệnh ${log.symbol} trên Binance vào Sổ tay!`);
-           }
-        } 
-        else if (log.status === 'OPEN') {
-           if (positionAmt === 0) { 
-              let exitPrice = autoData?.currentPrice;
-              if (log.symbol !== symbol) { 
-                  try { const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${log.symbol}`); const data = await res.json(); if (data.price) exitPrice = parseFloat(data.price); } catch(e) {}
+          // Lấy Lịch sử Giao dịch (User Trades) của đồng Coin này từ mốc lệnh cũ nhất
+          let binanceTrades = [];
+          try {
+              const oldestTime = new Date(symLogs[0].created_at).getTime();
+              const tradeRes = await fetch(`/api/binance?path=/fapi/v1/userTrades&symbol=${sym}&startTime=${oldestTime}&isPrivate=true&limit=1000&t=${ts}`);
+              if (tradeRes.ok) binanceTrades = await tradeRes.json();
+          } catch(e) { console.warn(`Lỗi fetch trades cho ${sym}`, e); }
+
+          // 3. Đối chiếu từng lệnh trong dòng thời gian
+          for (let i = 0; i < symLogs.length; i++) {
+              const log = symLogs[i];
+              const nextLog = symLogs[i+1]; // Dùng để chặn mốc thời gian, không cho PnL lẹm sang lệnh sau
+              
+              const logStartTime = new Date(log.created_at).getTime();
+              const logEndTime = nextLog ? new Date(nextLog.created_at).getTime() : Date.now();
+
+              // CẮT LÁT THỜI GIAN: Chỉ lấy các giao dịch Binance thuộc về chu kỳ của lệnh này
+              const cycleTrades = binanceTrades.filter(t => t.time >= logStartTime && t.time < logEndTime);
+              
+              // TRẠNG THÁI 1: LỆNH CHỜ KHỚP (PENDING)
+              if (log.status === 'PENDING') {
+                 if (positionAmt !== 0) {
+                    const realEntry = parseFloat(currentPosition.entryPrice);
+                    await supabase.from('trade_logs').update({ status: 'OPEN', entry: realEntry }).eq('id', log.id);
+                    updatedCount++;
+                 }
+              } 
+              // TRẠNG THÁI 2: LỆNH ĐANG CHẠY (OPEN)
+              else if (log.status === 'OPEN') {
+                 if (positionAmt === 0) { 
+                    // Vị thế đã biến mất -> Lệnh đã đóng -> Tính PnL
+                    let finalPnl = 0; let exitPrice = autoData?.currentPrice || parseFloat(log.entry);
+                    
+                    const closingTrades = cycleTrades.filter(t => parseFloat(t.realizedPnl) !== 0);
+                    if (closingTrades.length > 0) {
+                        const rawPnl = closingTrades.reduce((sum, t) => sum + parseFloat(t.realizedPnl), 0);
+                        const totalFee = closingTrades.reduce((sum, t) => sum + parseFloat(t.commission), 0);
+                        finalPnl = rawPnl - totalFee; // PNL RÒNG
+                        const totalQty = closingTrades.reduce((sum, t) => sum + parseFloat(t.qty), 0);
+                        const totalCost = closingTrades.reduce((sum, t) => sum + (parseFloat(t.price) * parseFloat(t.qty)), 0);
+                        exitPrice = totalCost / totalQty; 
+                    } else {
+                        // Fallback
+                        const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
+                        finalPnl = log.direction === 'LONG' ? (exitPrice - parseFloat(log.entry)) * sizeCoin : (parseFloat(log.entry) - exitPrice) * sizeCoin;
+                    }
+
+                    await supabase.from('trade_logs').update({ 
+                        status: finalPnl > 0 ? 'WIN' : 'LOSS', pnl_usd: finalPnl, close_price: exitPrice,
+                        exit_reason: finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS', close_time: new Date().toISOString()
+                    }).eq('id', log.id);
+                    updatedCount++;
+                 } else { 
+                    // Đang chạy -> Cập nhật MFE / MAE
+                    const livePnl = parseFloat(currentPosition.unRealizedProfit);
+                    let newMfe = log.max_favorable_excursion_usd || 0; let newMae = log.max_adverse_excursion_usd || 0;
+                    let requiresUpdate = false;
+                    if (livePnl > newMfe) { newMfe = livePnl; requiresUpdate = true; }
+                    if (livePnl < newMae) { newMae = livePnl; requiresUpdate = true; }
+                    if (requiresUpdate) await supabase.from('trade_logs').update({ max_favorable_excursion_usd: newMfe, max_adverse_excursion_usd: newMae }).eq('id', log.id);
+                 }
               }
-              if (!exitPrice) exitPrice = parseFloat(log.entry);
-
-              const sizeCoin = parseFloat(log.risk_amount_usd) / Math.abs(parseFloat(log.entry) - parseFloat(log.sl));
-              const priceDiff = exitPrice - parseFloat(log.entry);
-              const finalPnl = log.direction === 'LONG' ? priceDiff * sizeCoin : -priceDiff * sizeCoin;
-
-              await supabase.from('trade_logs').update({ 
-                  status: finalPnl > 0 ? 'WIN' : 'LOSS', pnl_usd: finalPnl, close_price: exitPrice,
-                  exit_reason: finalPnl > 0 ? 'TP_OR_MANUAL_PROFIT' : 'SL_OR_MANUAL_LOSS', close_time: new Date().toISOString()
-              }).eq('id', log.id);
-              showToast(`🔄 Đã đóng lệnh ${log.symbol}! (PnL: ${finalPnl.toFixed(2)}$)`);
-           } else { 
-              const livePnl = parseFloat(currentPosition.unRealizedProfit);
-              let newMfe = log.max_favorable_excursion_usd || 0; let newMae = log.max_adverse_excursion_usd || 0;
-              let requiresUpdate = false;
-              if (livePnl > newMfe) { newMfe = livePnl; requiresUpdate = true; }
-              if (livePnl < newMae) { newMae = livePnl; requiresUpdate = true; }
-              if (requiresUpdate) await supabase.from('trade_logs').update({ max_favorable_excursion_usd: newMfe, max_adverse_excursion_usd: newMae }).eq('id', log.id);
-           }
-        }
+              // TRẠNG THÁI 3: LỆNH ĐÃ ĐÓNG (WIN / LOSS) -> KIỂM TOÁN LẠI PNL
+              else if (log.status === 'WIN' || log.status === 'LOSS') {
+                  const closingTrades = cycleTrades.filter(t => parseFloat(t.realizedPnl) !== 0);
+                  if (closingTrades.length > 0) {
+                      const rawPnl = closingTrades.reduce((sum, t) => sum + parseFloat(t.realizedPnl), 0);
+                      const totalFee = closingTrades.reduce((sum, t) => sum + parseFloat(t.commission), 0);
+                      const exactNetPnl = rawPnl - totalFee;
+                      
+                      const currentRecordedPnl = parseFloat(log.pnl_usd || 0);
+                      
+                      // Nếu sai lệch PnL lớn hơn 0.01$ (Bỏ qua sai số thập phân), cập nhật lại Supabase
+                      if (Math.abs(exactNetPnl - currentRecordedPnl) > 0.01) {
+                          await supabase.from('trade_logs').update({ 
+                              pnl_usd: exactNetPnl,
+                              // Đảm bảo trạng thái WIN/LOSS phản ánh đúng PnL sau khi đã trừ phí
+                              status: exactNetPnl > 0 ? 'WIN' : 'LOSS' 
+                          }).eq('id', log.id);
+                          updatedCount++;
+                          console.log(`[AUDIT] Đã truy thu/bù trừ PnL cho lệnh ${log.symbol}. Cũ: ${currentRecordedPnl}$ -> Mới: ${exactNetPnl}$`);
+                      }
+                  }
+              }
+          }
       }
-    } catch (e) { showToast(`❌ Lỗi đồng bộ: ${e.message}`); } 
-    finally { setIsSyncing(false); }
+
+      if (updatedCount > 0) {
+          showToast(`✅ Đã đối soát và cập nhật thành công ${updatedCount} lệnh với Máy chủ Binance!`);
+      } else {
+          showToast(`✅ Sổ cái hoàn hảo. Không có sai lệch PnL nào được phát hiện.`);
+      }
+
+    } catch (e) { 
+      showToast(`❌ Lỗi đồng bộ: ${e.message}`); 
+    } finally { 
+      setIsSyncing(false); 
+    }
   };
 
   const handleMasterAuto = () => { 
@@ -1912,7 +1942,7 @@ const QuantMath = {
 
   dynamicAsymmetricTargets: (bbwRank, bbwSlope, isSfp, atrPercent, obi, direction) => {
       // VÁ LỖI TOÁN HỌC: Adaptive RR Base để không bao giờ rớt isRRSafe trong Scanner
-      const requiredRR = bbwRank > 80 ? 1.5 : 1.2;
+      const requiredRR = bbwRank > 80 ? 2.0 : 1.8;
       let slMult = 1.5; 
       let tpMult = slMult * (requiredRR + 0.3); // Tự động nới TP xa ra để đền bù phí giao dịch
       let strategyName = "TIÊU CHUẨN (ADAPTIVE)";
@@ -1962,6 +1992,126 @@ export default QuantMath;
 =========================================
 
 
+
+=========================================
+/// FILE: src\core\TradeValidator.js
+=========================================
+
+/// FILE: src/core/TradeValidator.js
+
+export const TradeValidator = {
+  // 1. HỆ THỐNG CHẤM ĐIỂM (SCORING & PENALTY ENGINE)
+  evaluateScore: (autoData, apiMacro, vectorDetails, direction, mvrvZScore, symbol) => {
+    if (!autoData || !apiMacro || !vectorDetails) return { score: 0, synergyText: "", penaltyText: "", checks: {}, w: {} };
+    
+    const { l1, l2, l6, isAltcoinBleeding, isAltcoinSeason } = vectorDetails;
+    let w = { s1: 2.0, s2: 2.0, s3: 1.5, s4: 0.5, s5: 1.0, s6: 1.5, s7: 1.0, s8: 1.5 }; 
+    if (l1 === 'Range') { w = { s1: 0, s2: 2.0, s3: 4.0, s4: 1.0, s5: 1.5, s6: 1.0, s7: 1.0, s8: 1.0 }; } 
+    else if (l2 === 'Extreme') { w = { s1: 0, s2: 1.5, s3: 3.5, s4: 1.0, s5: 1.5, s6: 2.0, s7: 1.5, s8: 0.5 }; } 
+    else if (l1.includes('Trend') && l2 === 'Expansion') { w = { s1: 3.0, s2: 2.5, s3: 0, s4: 0.5, s5: 1.0, s6: 2.5, s7: 1.0, s8: 2.0 }; }
+
+    const isVolSpikeHUD = autoData.lastClosedVolume > (autoData.avgVolume20 * 2.5);
+
+    const checkS1 = direction === (l1 === 'Trend Up' ? 'LONG' : 'SHORT');
+    const checkS2 = direction === 'LONG' ? autoData.cmf > 0.05 : autoData.cmf < -0.05;
+    const checkS3 = direction === 'LONG' ? autoData.isBullishSFP : autoData.isBearishSFP;
+    const checkS4 = direction === 'LONG' ? (l1.includes('Trend') ? autoData.rsi < 65 : autoData.rsi < 40) : (l1.includes('Trend') ? autoData.rsi > 35 : autoData.rsi > 60); 
+    const checkS5 = direction === 'LONG' ? apiMacro.longShortRatio < 1.0 : apiMacro.longShortRatio > 1.0; 
+    const checkS6 = direction === 'LONG' ? (apiMacro.takerBuySellRatio > 1.05 && !autoData.isObvBearDivergence) : (apiMacro.takerBuySellRatio < 0.95 && !autoData.isObvBullDivergence);
+    const checkS7 = direction === 'LONG' ? (autoData.fundingRate < 0 && isVolSpikeHUD) : (autoData.fundingRate > 0 && isVolSpikeHUD);
+    const checkS8 = direction === 'LONG' ? (autoData.currentPrice > autoData.htfSma200 && autoData.ema200.slope > 0) : (autoData.currentPrice < autoData.htfSma200 && autoData.ema200.slope < 0);
+
+    let score = 0; 
+    if (checkS1) score += w.s1; if (checkS2) score += w.s2; if (checkS3) score += w.s3; if (checkS4) score += w.s4; 
+    if (checkS5) score += w.s5; if (checkS6) score += w.s6; if (checkS7) score += w.s7; if (checkS8) score += w.s8;
+
+    let synergyText = "";
+    if (l2 === 'Compression' && checkS2 && checkS6) { score += 2.0; synergyText += "[💣 The Spring] "; }
+    if (l2 === 'Extreme' && checkS3 && checkS4) { score += 2.0; synergyText += "[🩸 Capitulation Sweep] "; }
+    if (isVolSpikeHUD && !checkS5 && checkS6) { score += 1.5; synergyText += "[🪤 Smart Money Trap] "; }
+    if (direction === 'LONG' && isAltcoinSeason) { score += 1.0; synergyText += "[🌊 Altcoin Season] "; }
+
+    const isTripleTrendBull = autoData.ema20.slope > 0 && autoData.ema50.slope > 0 && autoData.ema200.slope > 0;
+    const isTripleTrendBear = autoData.ema20.slope < 0 && autoData.ema50.slope < 0 && autoData.ema200.slope < 0;
+    if ((direction === 'LONG' && isTripleTrendBull) || (direction === 'SHORT' && isTripleTrendBear)) { score += 1.5; synergyText += "[🚅 Triple-Engine] "; }
+    if (autoData.adx > 35 && checkS6) { score += 1.5; synergyText += "[🌪️ ADX Squeeze] "; }
+    if ((direction === 'LONG' && mvrvZScore < 1.0 && checkS3) || (direction === 'SHORT' && mvrvZScore > 2.5 && checkS3)) { score += 1.5; synergyText += "[💎 Deep Value Sweep] "; }
+    if (l2 === 'Compression' && autoData.bbwSlope > 10) { score += 2.0; synergyText += "[🧨 Vol Expansion] "; }
+    if (l2 === 'Compression' && ((direction === 'LONG' && autoData.obi > 0.7 && checkS6) || (direction === 'SHORT' && autoData.obi < 0.3 && checkS6))) { score += 2.0; synergyText += "[🐳 Whale Accumulation] "; }
+
+    let penaltyText = "";
+    if (direction === 'LONG' && isAltcoinBleeding) { score -= 2.0; penaltyText += "[-2.0 Altcoins Bleeding] "; }
+    if (direction === 'LONG' && l6.includes('Overvaluation')) { score -= 1.5; penaltyText += "[-1.5 MVRV Overvalue] "; }
+    if (direction === 'SHORT' && l6.includes('Undervaluation')) { score -= 1.5; penaltyText += "[-1.5 MVRV Undervalue] "; }
+    
+    // NÂNG CẤP ADX / NY SESSION
+    if (autoData.adx > 55) { score -= 1.5; penaltyText += "[-1.5 ADX Exhaustion] "; }
+    if (apiMacro.tradingSession === 'NEW_YORK' && l1.includes('Trend')) { score -= 1.5; penaltyText += "[-1.5 NY Session Trap] "; }
+
+    return { score, synergyText, penaltyText, checks: { checkS1, checkS2, checkS3, checkS4, checkS5, checkS6, checkS7, checkS8 }, w };
+  },
+
+  // 2. HỆ THỐNG MÀNG LỌC VÀ OVERRIDES (LOGIC GATES ENGINE)
+  evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol) => {
+    const { l1, l2, l3 } = vectorDetails;
+    const { score, synergyText, penaltyText, checks, w } = systemScore;
+    const requiredRR = autoData.bbwRank > 80 ? 2.0 : 1.8;
+
+    // KIỂM TRA TRÍ NHỚ COOLDOWN (Chống nhồi lệnh mù quáng)
+    const recentLossSameDirection = tradeLogs && tradeLogs.some(log => 
+        log.symbol === symbol && 
+        log.direction === direction && 
+        log.status === 'LOSS' &&
+        (Date.now() - new Date(log.close_time).getTime()) < 2 * 60 * 60 * 1000 
+    );
+
+    const hardGates = [
+      { id: 'h_cd', passed: !recentLossSameDirection, text: `COOLDOWN: Không nhồi lệnh cùng hướng ${direction} sau khi bị SL trong 2H qua.` },
+      { id: 'h1', passed: apiMacro.realSpreadPct < 0.2 && slTech > 0 && Math.abs(entry - slTech) > (autoData.atr14 * 0.5), text: `CHỐNG NHIỄU: Khoảng cách SL > 0.5 ATR` },
+      { id: 'h2', passed: parseFloat(mathCore.theoreticalRR) >= requiredRR, text: `KỲ VỌNG EV: R:R ròng >= ${requiredRR}` },
+      { id: 'h3_1', passed: l1 !== 'Transition', text: `REGIME LOCK: Xu hướng rõ ràng` },
+      { id: 'h3_2', passed: l2 !== 'Compression', text: `VOLATILITY: Không giao dịch trong vùng Nén` },
+      { id: 'h4', passed: tradeType === 'SPOT' || (mathCore.liqEstimate && !mathCore.leverageExceedsExchangeCap && mathCore.liqSafetyMargin >= 1.3), text: `ĐỆM THANH LÝ: An toàn Margin` },
+      { id: 'h5', passed: !mathCore.hasMinNotionalError, text: `MIN NOTIONAL: Risk bị ép <= 2.5% Vốn` },
+      { id: 'h6', passed: autoData.lastClosedVolume >= (autoData.avgVolume20 * 0.4), text: `VOL DEADZONE: Thanh khoản ổn định` }
+    ];
+
+    const softGates = [
+      { id: 's1', passed: checks.checkS1, weight: w.s1, text: `CẤU TRÚC L1 (+${w.s1})` },
+      { id: 's2', passed: checks.checkS2, weight: w.s2, text: `DÒNG TIỀN CMF (+${w.s2})` },
+      { id: 's3', passed: checks.checkS3, weight: w.s3, text: `SĂN THANH KHOẢN (+${w.s3})` },
+      { id: 's4', passed: checks.checkS4, weight: w.s4, text: `ĐỘNG LƯỢNG (+${w.s4})` },
+      { id: 's5', passed: checks.checkS5, weight: w.s5, text: `TÂM LÝ (+${w.s5})` },
+      { id: 's6', passed: checks.checkS6, weight: w.s6, text: `ORDER FLOW (+${w.s6})` },
+      { id: 's7', passed: checks.checkS7, weight: w.s7, text: `SQUEEZE (+${w.s7})` },
+      { id: 's8', passed: checks.checkS8, weight: w.s8, text: `HỢP LƯU VĨ MÔ (+${w.s8})` }
+    ];
+
+    if (synergyText) softGates.push({ id: 's_syn', passed: true, weight: 0, text: `🔥 SYNERGY BONUS: ${synergyText}` });
+    if (penaltyText) softGates.push({ id: 's_pen', passed: false, weight: 0, text: `⚠️ MACRO PENALTY: ${penaltyText}` });
+
+    const hardPassed = hardGates.every(g => g.passed);
+    const failedGates = hardGates.filter(g => !g.passed);
+
+    // XỬ LÝ CÁC OVERRIDE (BẼ KHÓA GATES)
+    const isOnlyRegimeFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h3_2');
+    const isSafeFromKnife = direction === 'LONG' ? (autoData.cmf > 0.15 && autoData.rsi > 35) : (autoData.cmf < -0.15 && autoData.rsi < 65);
+    const isGoldenOverride = isOnlyRegimeFailed && (score >= 8.5) && synergyText !== "" && isSafeFromKnife;
+    
+    const isOnlySLFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h1');
+    const isSniperOverride = isOnlySLFailed && checks.checkS3 && score >= 7.0;
+
+    const isOnlyVolFailed = failedGates.length > 0 && failedGates.every(g => g.id === 'h6');
+    const isHighRROverride = isOnlyVolFailed && parseFloat(mathCore.theoreticalRR) >= 2.5 && score >= 7.0;
+
+    const isNanoCapSniper = parseFloat(mathCore.theoreticalRR) >= 2.5 && (l2 === 'Compression' || l3.includes('SFP') || l3.includes('Squeeze Imminent') || (direction === 'LONG' && autoData.obi > 0.7) || (direction === 'SHORT' && autoData.obi < 0.3)) && !mathCore.hasMinNotionalError && score >= 7.0;
+    const isNanoOverride = failedGates.length > 0 && failedGates.every(g => g.id === 'h3_1' || g.id === 'h6') && isNanoCapSniper;
+
+    const isApproved = (hardPassed || isGoldenOverride || isSniperOverride || isHighRROverride || isNanoOverride) && (score >= 6.5); 
+    
+    return { hardGates, softGates, softScore: score, isApproved, isGoldenOverride, isSniperOverride, isHighRROverride, isNanoOverride };
+  }
+};
 
 =========================================
 /// FILE: src\hooks\useAI.js
@@ -2039,7 +2189,7 @@ export default function useExchangeConfig() {
 /// FILE: src\hooks\useLiveData.js
 =========================================
 
-// FILE: src/hooks/useLiveData.js
+/// FILE: src/hooks/useLiveData.js
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 
@@ -2054,21 +2204,11 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
   const [tradeFees, setTradeFees] = useState({ maker: 0.0002, taker: 0.0004 });
 
   const [autoData, setAutoData] = useState(null);
-  const [cmcData, setCmcData] = useState({
-    btcDominanceRealtime: 55.0,
-    totalMarketCapBillion: 0,
-    fgiClassification: 'NEUTRAL'
-  });
+  const [cmcData, setCmcData] = useState({ btcDominanceRealtime: 55.0, totalMarketCapBillion: 0, fgiClassification: 'NEUTRAL' });
 
   const [apiMacro, setApiMacro] = useState({
-    fgiValue: 50,
-    longShortRatio: 1.0,
-    lsPositionVolRatio: 1.0, 
-    takerBuySellRatio: 1.0, 
-    tradingSession: 'ASIAN', 
-    sessionMultiplier: 0.8,
-    isWeekend: false,
-    realSpreadPct: 0.05 
+    fgiValue: 50, longShortRatio: 1.0, lsPositionVolRatio: 1.0, takerBuySellRatio: 1.0, 
+    tradingSession: 'ASIAN', sessionMultiplier: 0.8, isWeekend: false, realSpreadPct: 0.05 
   });
 
   const apiMacroRef = useRef(apiMacro);
@@ -2079,19 +2219,12 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
       const now = new Date();
       const utcHour = now.getUTCHours();
       const day = now.getUTCDay();
-      
-      let currentSession = 'ASIAN';
-      let mult = 0.8; 
-      
+      let currentSession = 'ASIAN'; let mult = 0.8; 
       if (utcHour >= 8 && utcHour < 13) { currentSession = 'LONDON'; mult = 1.2; }
       if (utcHour >= 13 && utcHour < 21) { currentSession = 'NEW_YORK'; mult = 1.5; }
-      
       const isWknd = (day === 0 || day === 6);
       if (isWknd) mult = mult * 0.5;
-      
-      setApiMacro(prev => ({ 
-        ...prev, isWeekend: isWknd, tradingSession: currentSession, sessionMultiplier: mult
-      }));
+      setApiMacro(prev => ({ ...prev, isWeekend: isWknd, tradingSession: currentSession, sessionMultiplier: mult }));
     };
     detectSessionAndWeekend();
     const timer = setInterval(detectSessionAndWeekend, 60000); 
@@ -2102,7 +2235,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     let isMounted = true;
     const fetchBracketsAndFees = async () => {
       try {
-        const ts = Date.now();
+        const ts = Math.floor(Date.now() / 60000); 
         const resBracket = await fetch(`/api/binance?path=/fapi/v1/leverageBracket&symbol=${symbol}&isPrivate=true&t=${ts}`);
         if (resBracket.ok) {
            const data = await resBracket.json();
@@ -2139,6 +2272,7 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     return () => { isMounted = false; clearInterval(timer); };
   }, []);
 
+  // LUỒNG 1: REST API LẤY CHỈ BÁO NẶNG (15S/LẦN) - GIỮ NGUYÊN HOÀN TOÀN LOGIC CỦA BẠN
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -2156,19 +2290,17 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         let macroInterval = intervalTime;
         if (intervalTime === '1w') macroInterval = '1d'; 
 
-        const ts = Date.now(); 
+        const ts = Math.floor(Date.now() / 15000) * 15000; 
         
         const safeFetch = async (url) => {
           try {
             const startPing = Date.now();
             const res = await fetch(url, { signal: controller.signal });
             const latency = Date.now() - startPing;
-            
             const weight = res.headers.get('x-mbx-used-weight-1m');
             if (weight && setSystemHealth && isMounted) {
                setSystemHealth(prev => ({ ...prev, weight: parseInt(weight, 10), latency }));
             }
-
             if (!res.ok) return null;
             return await res.json();
           } catch (e) { return null; }
@@ -2221,7 +2353,6 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
             const ask = parseFloat(realBookTicker.askPrice);
             const bidQty = parseFloat(realBookTicker.bidQty || 0);
             const askQty = parseFloat(realBookTicker.askQty || 0);
-            
             if (bid > 0) fetchedSpread = ((ask - bid) / bid) * 100;
             if (bidQty + askQty > 0) fetchedObi = bidQty / (bidQty + askQty);
         }
@@ -2297,7 +2428,6 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
         const isObvBearDivergence = (currentPrice > htfSma200) && (obvArray[obvArray.length-1] < obvEma20);
         const isObvBullDivergence = (currentPrice < htfSma200) && (obvArray[obvArray.length-1] > obvEma20);
 
-        // VÁ LỖI ĐỒNG BỘ: Chuyền parameter chính xác cho detectSFP_Advanced
         setAutoData({
             currentPrice, atr14, atrPercent: currentPrice > 0 ? (atr14 / currentPrice) * 100 : 0, atrRank,
             adx: adxValue, htfSma200, rsi: rsiValue, bbwRank, bbw: bollinger20.bbw, cmf: cmfValue,
@@ -2336,6 +2466,37 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
     return () => { isMounted = false; controller.abort(); clearInterval(timer); };
   }, [symbol, intervalTime, indicatorSpecs, cmcData.btcDominanceRealtime]);
 
+  // LUỒNG 2: WEBSOCKET REAL-TIME TICKER (ĐỘ TRỄ ~100ms) - Cập nhật giá liên tục không dội Vercel
+  useEffect(() => {
+    let isMounted = true;
+    const wsUrl = `wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+        if (!isMounted) return;
+        const data = JSON.parse(event.data);
+        if (data.e === 'markPriceUpdate') {
+            const newPrice = parseFloat(data.p);
+            // Cập nhật giá ngay lập tức vào state autoData để Form tính toán Size/EV nảy số liên tục
+            setAutoData(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    currentPrice: newPrice,
+                    atrPercent: newPrice > 0 ? (prev.atr14 / newPrice) * 100 : prev.atrPercent
+                };
+            });
+        }
+    };
+
+    ws.onerror = () => { console.log("WebSocket MarkPrice bị lỗi ngắt kết nối."); };
+
+    return () => {
+        isMounted = false;
+        ws.close();
+    };
+  }, [symbol]);
+
   return { loading, lastUpdated, systemError, liveCapital, binancePositions, leverageBrackets, tradeFees, autoData, cmcData, apiMacro };
 }
 
@@ -2353,10 +2514,11 @@ export default function useLiveData({ symbol, intervalTime, indicatorSpecs, setS
 import { useState, useEffect, useRef } from 'react';
 import QuantMath from '../core/QuantMath';
 import { POOL_INTERVALS, POOL_SYMBOLS } from '../config/constants';
+import { TradeValidator } from '../core/TradeValidator';
 
 export default function useMatrixScanner({ 
   liveCapital, autoData, mvrvZScore, tradeFees, apiMacro, showToast, 
-  dynamicPool, dynamicMinNotionals, setSystemHealth, systemHealth
+  dynamicPool, dynamicMinNotionals, setSystemHealth, systemHealth, tradeLogs
 }) {
   const [scannedTopSetups, setScannedTopSetups] = useState([]);
   const [isScanningBackground, setIsScanningBackground] = useState(false);
@@ -2415,7 +2577,7 @@ export default function useMatrixScanner({
       const currentMinNotionals = dynamicMinNotionalsRef.current || {};
 
       try {
-        const ts = Date.now();
+        const ts = Math.floor(Date.now() / 30000) * 30000;
         const scanResultsPool = [];
         const realtimeMetrics = {};
         
@@ -2470,7 +2632,7 @@ export default function useMatrixScanner({
           }
         }
 
-        const SYMBOL_CHUNK_SIZE = 3; 
+        const SYMBOL_CHUNK_SIZE = 6; 
         const results = [];
 
         // Thay đổi loop duyệt mảng fetchTasks thay vì currentPool
@@ -2519,6 +2681,7 @@ export default function useMatrixScanner({
           if (result.status !== 'fulfilled' || !Array.isArray(result.value.klines) || result.value.klines.length < 50) continue;
           
           try {
+            await new Promise(resolve => setTimeout(resolve, 5));
             const { symbol: targetSymbol, interval: targetInterval, klines, klinesMTF, klinesHTF, localTakerRatio, localLsRatio } = result.value;
 
             let closesMTF = [];
@@ -2637,109 +2800,22 @@ export default function useMatrixScanner({
             const isObvBearDivergenceLocal = (price > htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] < obvEma20Local);
             const isObvBullDivergenceLocal = (price < htfSma200) && (obvArrayLocal[obvArrayLocal.length-1] > obvEma20Local);
 
-            let w = { s1: 2.0, s2: 1.5, s3: 1.5, s4: 1.0, s5: 1.0, s6: 1.5, s7: 1.0, s8: 1.5 }; 
-            if (l1 === 'Range') { w = { s1: 0, s2: 1.5, s3: 4.0, s4: 2.0, s5: 1.5, s6: 1.0, s7: 1.0, s8: 1.0 }; } 
-            else if (l2 === 'Extreme') { w = { s1: 0, s2: 1.0, s3: 3.5, s4: 2.5, s5: 1.5, s6: 2.0, s7: 1.5, s8: 0.5 }; } 
-            else if (l1.includes('Trend') && l2 === 'Expansion') { w = { s1: 3.0, s2: 2.5, s3: 0, s4: 1.0, s5: 1.0, s6: 2.5, s7: 1.0, s8: 2.0 }; }
-
-            const checkS1 = dir === (l1.includes('Trend Up') ? 'LONG' : 'SHORT');
-            const checkS2 = dir === 'LONG' ? cmf > 0.05 : cmf < -0.05;
-            const checkS3 = dir === 'LONG' ? localSfpLong : localSfpShort;
-            const checkS4 = dir === 'LONG' ? (l1.includes('Trend') ? rsi < 65 : rsi < 40) : (l1.includes('Trend') ? rsi > 35 : rsi > 60); 
-            const checkS5 = dir === 'LONG' ? localLsRatio < 1.0 : localLsRatio > 1.0; 
+            const mockVectorDetails = { l1, l2, l3, l4, l5, l6, isAltcoinBleeding: isAltcoinBleedingLocal, isAltcoinSeason: false };
             
-            const localVolSpike = closedVolume > (avgVolume20 * 2.5);
-            const checkS6 = dir === 'LONG' ? (localTakerRatio > 1.05 && !isObvBearDivergenceLocal) : (localTakerRatio < 0.95 && !isObvBullDivergenceLocal);
-            const checkS7 = dir === 'LONG' ? (realFunding < 0 && localVolSpike) : (realFunding > 0 && localVolSpike); 
-            const checkS8 = dir === 'LONG' ? (price > htfSma200 && scan50_200.slowSlope > 0) : (price < htfSma200 && scan50_200.slowSlope < 0); 
-
-            let embeddedScore = 0;
-            if (checkS1) embeddedScore += w.s1;
-            if (checkS2) embeddedScore += w.s2;
-            if (checkS3) embeddedScore += w.s3;
-            if (checkS4) embeddedScore += w.s4;
-            if (checkS5) embeddedScore += w.s5;
-            if (checkS6) embeddedScore += w.s6;
-            if (checkS7) embeddedScore += w.s7;
-            if (checkS8) embeddedScore += w.s8;
-            
-            if (l2 === 'Compression' && bbwSlopeLocal > 10) embeddedScore += 2.0;
-            if (l2 === 'Compression' && ((dir === 'LONG' && localObi > 0.7 && checkS6) || (dir === 'SHORT' && localObi < 0.3 && checkS6))) embeddedScore += 2.0;
-            if (l2 === 'Compression' && checkS2 && checkS6) embeddedScore += 2.0;
-            if (l2 === 'Extreme' && checkS3 && checkS4) embeddedScore += 2.0;
-            if (localVolSpike && !checkS5 && checkS6) embeddedScore += 1.5;
-
-            const isTripleTrendBull = scan20_50.fastSlope > 0 && scan20_50.slowSlope > 0 && scan50_200.slowSlope > 0;
-            const isTripleTrendBear = scan20_50.fastSlope < 0 && scan20_50.slowSlope < 0 && scan50_200.slowSlope < 0;
-            
-            if ((dir === 'LONG' && isTripleTrendBull) || (dir === 'SHORT' && isTripleTrendBear)) embeddedScore += 1.5;
-            if (adxValue > 35 && checkS6) embeddedScore += 1.5;
-            
-            const currentMvrv = mvrvZScoreRef?.current || 0.23;
-            const btcDomSlope = autoDataRef?.current?.btcDomSlope || 0;
-            const btcDomValue = autoDataRef?.current?.btcDomValue || 55.0;
-            
-            if ((dir === 'LONG' && currentMvrv < 1.0 && checkS3) || (dir === 'SHORT' && currentMvrv > 2.5 && checkS3)) embeddedScore += 1.5;
-            if (dir === 'LONG' && targetSymbol !== 'BTCUSDT' && btcDomSlope < -0.5) embeddedScore += 1.0; 
-
-            const isAltcoinBleedingLocal = targetSymbol !== 'BTCUSDT' && btcDomValue > 50 && btcDomSlope > 0.5;
-            if (dir === 'LONG' && isAltcoinBleedingLocal) embeddedScore -= 2.0;
-            if (dir === 'LONG' && currentMvrv >= 1.0) embeddedScore -= 1.5;
-            if (dir === 'SHORT' && currentMvrv <= 0.8) embeddedScore -= 1.5;
-
-            const requiredRR = bbwRank > 80 ? 1.5 : 1.2;
-            const isRRSafe = simulatedRR >= requiredRR;
-            const isRegimeSafe = l1 !== 'Transition' && l2 !== 'Compression';
-            const isVolSafe = closedVolume >= (avgVolume20 * 0.4);
-            const isSLSafe = riskDiffTech > (atr14 * 0.5);
-
-            const isSafeFromKnife = dir === 'LONG' ? (cmf > 0.15 && rsi > 35) : (cmf < -0.15 && rsi < 65);
-            const hasSynergy = (l2 === 'Compression' && checkS2 && checkS6) || 
-                               (l2 === 'Extreme' && checkS3 && checkS4) || 
-                               (localVolSpike && !checkS5 && checkS6) || 
-                               (dir === 'LONG' && targetSymbol !== 'BTCUSDT' && btcDomSlope < -0.5) || 
-                               isTripleTrendBull || isTripleTrendBear || 
-                               (adxValue > 35 && checkS6) || 
-                               (dir === 'LONG' && currentMvrv < 1.0 && checkS3) || 
-                               (dir === 'SHORT' && currentMvrv > 2.5 && checkS3) ||
-                               (l2 === 'Compression' && bbwSlopeLocal > 10);
-
-            const hasNanoCapSynergy = 
-                simulatedRR >= 2.5 && 
-                (l2 === 'Compression' || localSfpLong || localSfpShort || localVolSpike || (dir === 'LONG' && localObi > 0.7) || (dir === 'SHORT' && localObi < 0.3));
-
-            const isGoldenOverride = !isRegimeSafe && isRRSafe && isVolSafe && isSLSafe && (embeddedScore >= 8.5) && hasSynergy && isSafeFromKnife;
-            const isSniperOverride = !isSLSafe && isRegimeSafe && isRRSafe && isVolSafe && checkS3 && embeddedScore >= 7.0;
-            const isHighRROverride = !isVolSafe && isSLSafe && isRegimeSafe && isRRSafe && simulatedRR >= 2.5 && embeddedScore >= 7.0;
-            const isNanoCapOverride = (!isVolSafe || !isRegimeSafe) && isSLSafe && hasNanoCapSynergy && embeddedScore >= 7.0;
-
-            const hasSqueezeX10 = (bbwRank <= 15 && bbwSlopeLocal > 10 && localVolSpike && checkS6); 
-            const hasSniperX5 = ((dir === 'LONG' ? localSfpLong : localSfpShort) && ((dir==='LONG' && localObi>0.75) || (dir==='SHORT' && localObi<0.25)));
-
-            const isX10SqueezeOverride = !isVolSafe && isSLSafe && hasSqueezeX10 && embeddedScore >= 7.0 && simulatedRR >= 4.0;
-            const isX5SniperOverride = !isSLSafe && isRegimeSafe && hasSniperX5 && embeddedScore >= 7.0 && simulatedRR >= 3.0;
-
-            const finalRegimeCheck = isRegimeSafe || isGoldenOverride || isNanoCapOverride;
-            const finalVolCheck = isVolSafe || isHighRROverride || isNanoCapOverride || isX10SqueezeOverride;
-            const finalSLCheck = isSLSafe || isSniperOverride || isNanoCapOverride || isX5SniperOverride;
-
-            const isApproved = (isRRSafe && finalRegimeCheck && finalVolCheck && finalSLCheck);
-            if (!isApproved || embeddedScore < 6.5) continue; 
-
-            const riskMultiplier = Math.max(0.5, Math.min(2.0, (embeddedScore - 5) / 3));
+            // TẠO MOCK OBJECT CHO TOÁN HỌC SINH TỒN
+            // TÍNH TOÁN MIN NOTIONAL CHUẨN XÁC ĐỂ TRÁNH QUÉT SAI
             const currentMinNotional = currentMinNotionals[targetSymbol] || 5.0;
             const capitalSafe = liveCapitalRef.current > 0 ? liveCapitalRef.current : 106.0; 
             
-            const appliedRiskPercent = 1.0 * riskMultiplier; 
-            const riskAmountUSD = capitalSafe * (appliedRiskPercent / 100); 
+            const riskMultiplier = Math.max(0.5, Math.min(2.0, (embeddedScore - 5) / 3));
+            const appliedRiskPercent = 1.0 * riskMultiplier; // Base risk = 1%
+            let riskAmountUSD = capitalSafe * (appliedRiskPercent / 100); 
 
+            // Tính SL Distance
             const atrPercentLocal = (atr14 / price) * 100;
-            const minSafeAtr = 0.005;
             const isCompressedLocal = l2 === 'Compression' || bbwRank < 20;
-            const effectiveAtrPercentLocal = isCompressedLocal ? Math.max(atrPercentLocal, minSafeAtr * 100) * 1.5 : atrPercentLocal;
-            const sessionMult = apiMacroRef.current?.sessionMultiplier || 1.0;
-
-            const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * sessionMult; 
+            const effectiveAtrPercentLocal = isCompressedLocal ? Math.max(atrPercentLocal, 0.5) * 1.5 : atrPercentLocal;
+            const slippageBuffer = entry * (effectiveAtrPercentLocal / 100) * cRegime * (apiMacroRef.current?.sessionMultiplier || 1.0); 
             const sizeSlDistance = riskDiffTech + slippageBuffer;
 
             let slPercentForSize = sizeSlDistance / entry;
@@ -2747,21 +2823,49 @@ export default function useMatrixScanner({
 
             let positionSizeUSD = riskAmountUSD / slPercentForSize;
             
-            if (positionSizeUSD < currentMinNotional) positionSizeUSD = currentMinNotional; 
-
-            const actualRiskUSD = positionSizeUSD * slPercentForSize;
-            const maxSurvivalRiskUSD = capitalSafe * 0.05; 
+            let hasMinNotionalErrorLocal = false;
             
-            if (actualRiskUSD > maxSurvivalRiskUSD) continue;
+            // LOGIC CHUẨN: Chỉ phạt khi sàn ÉP tăng size, làm risk vượt 2.5% vốn
+            if (positionSizeUSD > 0 && positionSizeUSD < currentMinNotional) {
+                positionSizeUSD = currentMinNotional; 
+                const forcedRiskUSD = positionSizeUSD * slPercentForSize;
+                if (forcedRiskUSD > capitalSafe * 0.025) {
+                    hasMinNotionalErrorLocal = true;
+                }
+            }
 
-            let suggestedLeverage = Math.max(1, Math.ceil(positionSizeUSD / (capitalSafe * 0.9)));
+            // TẠO MOCK OBJECT CHO TOÁN HỌC SINH TỒN
+            const mockMathCore = {
+                theoreticalRR: simulatedRR.toFixed(2),
+                hasMinNotionalError: hasMinNotionalErrorLocal, // Áp dụng cờ lỗi chuẩn xác
+                liqEstimate: { liqPrice: 0, maxLevForTier: 50 }, 
+                leverageExceedsExchangeCap: false,
+                liqSafetyMargin: 2.0
+            };
 
+            // GỌI TRỌNG TÀI DUY NHẤT (Single Source of Truth)
+            const localSystemScore = TradeValidator.evaluateScore(
+                {...autoData, adx: adxValue, cmf: cmf, rsi: rsi, isBullishSFP: localSfpLong, isBearishSFP: localSfpShort, fundingRate: realFunding, lastClosedVolume: closedVolume, avgVolume20: avgVolume20, currentPrice: price, htfSma200: htfSma200, ema200: {slope: scan50_200.slowSlope}, bbwSlope: bbwSlopeLocal, obi: localObi, isObvBearDivergence: isObvBearDivergenceLocal, isObvBullDivergence: isObvBullDivergenceLocal}, 
+                {...apiMacro, longShortRatio: localLsRatio, takerBuySellRatio: localTakerRatio, tradingSession: apiMacroRef.current.tradingSession}, 
+                mockVectorDetails, dir, currentMvrv, targetSymbol
+            );
+
+            const localGates = TradeValidator.evaluateGates(
+                {...autoData, atr14: atr14, lastClosedVolume: closedVolume, avgVolume20: avgVolume20, bbwRank: bbwRank},
+                {...apiMacro, realSpreadPct: realSpread},
+                mockVectorDetails, mockMathCore, dir, 'FUTURES', entry, sl, localSystemScore, tradeLogs, targetSymbol
+            );
+
+            // NẾU TRỌNG TÀI BẢO "BLOCK" THÌ NEXT LUÔN COIN KHÁC, KHÔNG CHO LÊN BẢNG SCANNER
+            if (!localGates.isApproved) continue;
+
+            // Xử lý Override Tag để gắn màu tím, vàng, hồng... trên Scanner
             let overrideTag = strategyName !== "TIÊU CHUẨN (ADAPTIVE)" ? strategyName : '';
             if (overrideTag === '') {
-                if (isNanoCapOverride) overrideTag = '🦠 NANO-CAP';
-                else if (isSniperOverride) overrideTag = '🎯 SNIPER';
-                else if (isHighRROverride) overrideTag = '🚀 ASYM-RR';
-                else if (isGoldenOverride) overrideTag = '⚡ GOLDEN';
+                if (localGates.isNanoOverride) overrideTag = '🦠 NANO-CAP';
+                else if (localGates.isSniperOverride) overrideTag = '🎯 SNIPER';
+                else if (localGates.isHighRROverride) overrideTag = '🚀 ASYM-RR';
+                else if (localGates.isGoldenOverride) overrideTag = '⚡ GOLDEN';
             }
 
             scanResultsPool.push({
@@ -2801,7 +2905,7 @@ export default function useMatrixScanner({
     };
 
     runCrossAssetScan();
-    const scanTimer = setInterval(runCrossAssetScan, 40000); 
+    const scanTimer = setInterval(runCrossAssetScan, 30000);
     return () => { isMounted = false; clearInterval(scanTimer); };
   }, []); 
 
@@ -2903,141 +3007,66 @@ export const supabase = (supabaseUrl && supabaseKey)
 /// FILE: api\binance.js
 =========================================
 
-// FILE: api/binance.js
-import crypto from 'crypto';
+/// FILE: api/binance.js
+export const config = {
+  runtime: 'edge', // Bắt buộc chạy trên Edge Network để giảm tối đa độ trễ
+};
 
-export default async function handler(req, res) {
+// Sử dụng Web Crypto API thay thế thư viện crypto của Node.js
+async function hmacSha256(key, message) {
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export default async function handler(req) {
   const API_KEY = process.env.BINANCE_API_KEY;
   const API_SECRET = process.env.BINANCE_API_SECRET;
+  const url = new URL(req.url);
 
   try {
-    // =========================================================================
-    // 1. LUỒNG ĐẶT LỆNH (POST) - HỖ TRỢ ĐƠN LỆNH & CỤM LỆNH (BATCH)
-    // =========================================================================
+    // LUỒNG POST GIỮ NGUYÊN BỘ MÃ HÓA MỚI (Dù Frontend dùng Localhost, API vẫn sẵn sàng)
     if (req.method === 'POST') {
-      if (!API_KEY || !API_SECRET) {
-        return res.status(500).json({ error: 'Missing API Keys on Backend.' });
-      }
+      if (!API_KEY || !API_SECRET) return new Response(JSON.stringify({ error: 'Missing API Keys.' }), { status: 500 });
+      const body = await req.json();
 
-      // ---------------------------------------------------------------------
-      // VÁ LỖI MỚI: Bypass Ký hợp đồng TradFi (Vàng, Bạc, Ngoại hối)
-      // ---------------------------------------------------------------------
-      if (req.body.action === 'SIGN_TRADFI') {
+      if (body.action === 'SIGN_TRADFI') {
         const params = new URLSearchParams();
         params.append('timestamp', Date.now().toString());
         params.append('recvWindow', '5000');
         
         const queryString = params.toString();
-        const signature = crypto.createHmac('sha256', API_SECRET).update(queryString).digest('hex');
-        
-        // Endpoint chính thức của Binance cho TradFi-Perps
+        const signature = await hmacSha256(API_SECRET, queryString);
         const targetUrl = `https://fapi.binance.com/fapi/v1/stock/contract?${queryString}&signature=${signature}`;
         
         const binanceRes = await fetch(targetUrl, {
           method: 'POST',
-          headers: {
-            'X-MBX-APIKEY': API_KEY,
-            'Content-Type': 'application/x-www-form-urlencoded'
-          }
+          headers: { 'X-MBX-APIKEY': API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
         });
-
         const textRaw = await binanceRes.text();
-        let data;
-        try { data = JSON.parse(textRaw); } catch(e) { data = { msg: textRaw } };
-
-        if (!binanceRes.ok) return res.status(binanceRes.status).json({ error: 'TradFi Sign Failed', details: data });
-        return res.status(200).json(data);
+        let data; try { data = JSON.parse(textRaw); } catch(e) { data = { msg: textRaw }; }
+        if (!binanceRes.ok) return new Response(JSON.stringify({ error: 'TradFi Sign Failed', details: data }), { status: binanceRes.status });
+        return new Response(JSON.stringify(data), { status: 200 });
       }
-
-      // ---------------------------------------------------------------------
-      // CÁC LOGIC BATCH ORDERS VÀ LỆNH LIMIT/MARKET GIỮ NGUYÊN
-      // ---------------------------------------------------------------------
-      if (req.body.batchOrders) {
-        const params = new URLSearchParams();
-        params.append('batchOrders', JSON.stringify(req.body.batchOrders));
-        params.append('timestamp', Date.now().toString());
-        params.append('recvWindow', '5000');
-        
-        const queryString = params.toString();
-        const signature = crypto.createHmac('sha256', API_SECRET).update(queryString).digest('hex');
-        
-        const targetUrl = `https://fapi.binance.com/fapi/v1/batchOrders?${queryString}&signature=${signature}`;
-        
-        const binanceRes = await fetch(targetUrl, {
-          method: 'POST',
-          headers: {
-            'X-MBX-APIKEY': API_KEY,
-            'Content-Type': 'application/x-www-form-urlencoded'
-          }
-        });
-
-        const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
-        if (weight1m) {
-            res.setHeader('x-mbx-used-weight-1m', weight1m);
-            res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
-        }
-
-        const textRaw = await binanceRes.text();
-        let data;
-        try { data = JSON.parse(textRaw); } catch(e) { data = { msg: textRaw } };
-
-        if (!binanceRes.ok) return res.status(binanceRes.status).json({ error: 'Binance Batch Rejected', details: data });
-        return res.status(200).json(data);
-      }
-
-      const { symbol, side, type, quantity, price } = req.body;
-      if (!symbol || !side || !type || !quantity) {
-        return res.status(400).json({ error: 'Payload thiếu tham số bắt buộc.' });
-      }
-
-      const params = new URLSearchParams({
-        symbol, side, type, quantity, 
-        timestamp: Date.now().toString(), 
-        recvWindow: '5000'
-      });
-
-      if (type === 'LIMIT') {
-        if (!price) return res.status(400).json({ error: "Lệnh LIMIT bắt buộc phải có giá (price)." });
-        params.append('price', price.toString());
-        params.append('timeInForce', 'GTC');
-      }
-
-      const queryString = params.toString();
-      const signature = crypto.createHmac('sha256', API_SECRET).update(queryString).digest('hex');
-      const finalQueryString = `${queryString}&signature=${signature}`;
       
-      const binanceRes = await fetch(`https://fapi.binance.com/fapi/v1/order?${finalQueryString}`, {
-        method: 'POST',
-        headers: {
-          'X-MBX-APIKEY': API_KEY,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
-      if (weight1m) {
-          res.setHeader('x-mbx-used-weight-1m', weight1m);
-          res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
-      }
-
-      const textRaw = await binanceRes.text();
-      let data;
-      try { data = JSON.parse(textRaw); } catch(e) { data = { msg: textRaw } };
-
-      if (!binanceRes.ok) return res.status(binanceRes.status).json({ error: 'Binance Rejected', details: data });
-      return res.status(200).json(data);
+      return new Response(JSON.stringify({ error: 'Orders must go through Local Bridge' }), { status: 400 });
     }
 
-    // =========================================================================
-    // 2. LUỒNG LẤY DỮ LIỆU (GET) - GIỮ NGUYÊN
-    // =========================================================================
+    // LUỒNG GET: TÍCH HỢP MULTI-TIER CACHING & EDGE PROXY
     if (req.method === 'GET') {
-      const queryParams = req.query || {};
-      const { path, isPrivate, t, ...binanceParams } = queryParams;
-
-      if (!path) {
-        return res.status(400).json({ error: 'Missing path parameter' });
-      }
+      const path = url.searchParams.get('path');
+      const isPrivate = url.searchParams.get('isPrivate');
+      
+      if (!path) return new Response(JSON.stringify({ error: 'Missing path parameter' }), { status: 400 });
 
       let baseUrl = 'https://api.binance.com';
       if (path.startsWith('/fapi') || path.startsWith('/futures')) {
@@ -3045,56 +3074,52 @@ export default async function handler(req, res) {
       }
 
       const params = new URLSearchParams();
-      for (const key in binanceParams) {
-         if (binanceParams[key] !== undefined && binanceParams[key] !== '') {
-             params.append(key, binanceParams[key]);
+      for (const [key, value] of url.searchParams.entries()) {
+         if (key !== 'path' && key !== 'isPrivate' && key !== 't' && value !== '') {
+             params.append(key, value);
          }
       }
       
       let queryString = params.toString();
-      let headers = { 'Content-Type': 'application/json' };
+      let headers = new Headers({ 'Content-Type': 'application/json' });
 
+      // Đối với Dữ liệu Cá nhân (Read-Only)
       if (isPrivate === 'true') {
-        if (!API_KEY || !API_SECRET) return res.status(500).json({ error: 'Missing API Keys for Private Data' });
-        
+        if (!API_KEY || !API_SECRET) return new Response(JSON.stringify({ error: 'Missing API Keys' }), { status: 500 });
         const timestamp = Date.now().toString();
         queryString += (queryString ? '&' : '') + `timestamp=${timestamp}&recvWindow=5000`;
-        const signature = crypto.createHmac('sha256', API_SECRET).update(queryString).digest('hex');
+        const signature = await hmacSha256(API_SECRET, queryString);
         queryString += `&signature=${signature}`;
-        
-        headers['X-MBX-APIKEY'] = API_KEY;
+        headers.set('X-MBX-APIKEY', API_KEY);
       }
 
       const targetUrl = `${baseUrl}${path}${queryString ? '?' + queryString : ''}`;
-      
       const binanceRes = await fetch(targetUrl, { headers });
       
+      const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
       const weight1m = binanceRes.headers.get('x-mbx-used-weight-1m');
       if (weight1m) {
-          res.setHeader('x-mbx-used-weight-1m', weight1m);
-          res.setHeader('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
+          responseHeaders.set('x-mbx-used-weight-1m', weight1m);
+          responseHeaders.set('Access-Control-Expose-Headers', 'x-mbx-used-weight-1m');
+      }
+
+      // KÍCH HOẠT CACHE 15 GIÂY CHO DỮ LIỆU CÔNG KHAI
+      if (isPrivate !== 'true') {
+          responseHeaders.set('Cache-Control', 's-maxage=5, stale-while-revalidate=55');
       }
 
       const textRaw = await binanceRes.text();
       let data;
-      try {
-        data = JSON.parse(textRaw);
-      } catch (err) {
-        console.error("Binance returned non-JSON:", textRaw);
-        return res.status(502).json({ error: 'Invalid JSON from Binance', content: textRaw.substring(0, 200) });
-      }
+      try { data = JSON.parse(textRaw); } 
+      catch (err) { return new Response(JSON.stringify({ error: 'Invalid JSON', content: textRaw.substring(0, 200) }), { status: 502 }); }
 
-      return res.status(binanceRes.status).json(data);
+      return new Response(JSON.stringify(data), { status: binanceRes.status, headers: responseHeaders });
     }
 
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 });
 
   } catch (error) {
-    console.error('🔥 Serverless Error:', error);
-    return res.status(500).json({ 
-      error: 'Internal Vercel Server Error', 
-      message: error.message
-    });
+    return new Response(JSON.stringify({ error: 'Edge Server Error', message: error.message }), { status: 500 });
   }
 }
 
