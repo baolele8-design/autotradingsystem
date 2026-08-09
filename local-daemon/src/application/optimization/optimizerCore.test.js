@@ -495,7 +495,7 @@ test('reports missing BTC context without inventing a market regime', () => {
   assert.equal(model.btc_context_summary.btc_ranging_trade_pct, null);
 });
 
-test('marks an unreachable trailing stage as observation with five samples', () => {
+test('keeps a five-sample trailing proposal at baseline (unified schedule)', () => {
   const trades = Array.from({ length: 5 }, (_, index) => makeTrade({
     id: index + 1,
     strategy_name: 'ADAPTIVE_SHORT_FALLBACK [BOT]',
@@ -513,13 +513,13 @@ test('marks an unreachable trailing stage as observation with five samples', () 
   });
 
   const proposal = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
-  assert.equal(proposal.status, 'OBSERVE');
+  assert.equal(proposal.status, 'BASELINE');
   assert.equal(proposal.sample_size, 5);
-  assert.equal(proposal.reachability.lock_miss_rate, 1);
-  assert.ok(proposal.optimized.lockTrigger < proposal.baseline.lockTrigger);
+  assert.equal(proposal.reachability.lock_miss_rate, 0);
+  assert.deepEqual(proposal.optimized, proposal.baseline);
 });
 
-test('activates a regime trailing proposal only at fifteen samples', () => {
+test('forces a fifteen-sample regime proposal back to baseline (pinned schedule)', () => {
   const trades = Array.from({ length: MIN_MATRIX_SAMPLES }, (_, index) =>
     makeTrade({
       id: index + 1,
@@ -539,9 +539,13 @@ test('activates a regime trailing proposal only at fifteen samples', () => {
   });
 
   const proposal = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
-  assert.equal(proposal.status, 'ACTIVE');
+  assert.equal(proposal.status, 'BASELINE');
   assert.equal(proposal.sample_size, MIN_MATRIX_SAMPLES);
-  assert.ok(proposal.optimized.lockTrigger < proposal.baseline.lockTrigger);
+  assert.equal(
+    proposal.activation_block,
+    'PERMANENT_PINNED_SCHEDULE'
+  );
+  assert.equal(proposal.optimized.lockTrigger, proposal.baseline.lockTrigger);
   assert.ok(proposal.optimized.lockAmount < proposal.optimized.lockTrigger);
   assert.ok(proposal.optimized.trailTrigger > proposal.optimized.lockTrigger);
 });
@@ -581,16 +585,20 @@ test('learns BTC trailing context hierarchically with the same sample guards', (
 
   const parent = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
   const btcProposal = parent.by_btc_regime.BULLISH_TREND;
-  assert.equal(btcProposal.status, 'ACTIVE');
+  assert.equal(btcProposal.status, 'BASELINE');
   assert.equal(btcProposal.sample_size, MIN_MATRIX_SAMPLES);
+  assert.equal(
+    btcProposal.activation_block,
+    'PERMANENT_PINNED_SCHEDULE'
+  );
   assert.deepEqual(btcProposal.baseline, parent.optimized);
-  assert.ok(
-    btcProposal.optimized.lockTrigger <
-      btcProposal.baseline.lockTrigger
+  assert.equal(
+    btcProposal.optimized.lockTrigger,
+    btcProposal.baseline.lockTrigger
   );
 });
 
-test('never activates the temporary Adaptive Short Tier 3 observation cell', () => {
+test('never activates an adaptive trailing cell (pinned schedule)', () => {
   const trades = Array.from({ length: MIN_MATRIX_SAMPLES }, (_, index) =>
     makeTrade({
       id: index + 1,
@@ -610,10 +618,10 @@ test('never activates the temporary Adaptive Short Tier 3 observation cell', () 
   });
 
   const proposal = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
-  assert.equal(proposal.status, 'OBSERVE');
+  assert.equal(proposal.status, 'BASELINE');
   assert.equal(
     proposal.activation_block,
-    'TEMPORARY_MANUAL_OBSERVATION_OVERRIDE'
+    'PERMANENT_PINNED_SCHEDULE'
   );
   assert.equal(cell.trailing_learning_applied, false);
 });
@@ -641,7 +649,7 @@ test('does not learn trailing policy from trades missing regime_at_entry', () =>
   assert.equal(cell.trailing_learning_applied, false);
 });
 
-test('keeps trailing proposal in observation when only five excursions are usable', () => {
+test('keeps a trailing proposal at baseline when only five excursions are usable', () => {
   const trades = Array.from({ length: MIN_MATRIX_SAMPLES }, (_, index) =>
     makeTrade({
       id: index + 1,
@@ -661,7 +669,7 @@ test('keeps trailing proposal in observation when only five excursions are usabl
   });
 
   const proposal = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
-  assert.equal(proposal.status, 'OBSERVE');
+  assert.equal(proposal.status, 'BASELINE');
   assert.equal(proposal.sample_size, 5);
   assert.equal(cell.trailing_learning_applied, false);
 });

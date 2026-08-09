@@ -148,35 +148,30 @@ together when ownership, lifecycle, risk, or order contracts change.
 
 See `SYSTEM_RULES.md` for the full verified/gap register.
 
-## 6. Permanent adaptive protection floor (2026-08-06)
+## 6. Permanent unified trailing schedule (2026-08-07)
 
-- **Policy:** every adaptive cell — `ADAPTIVE_LONG_FALLBACK` and
-  `ADAPTIVE_SHORT_FALLBACK`, all four asset tiers — runs one conservative
-  schedule: `BE 0.40R / LOCK 1.00R / +0.35R / TRAIL 1.50R / 0.60R`.
-  Rationale (owner directive): break even rather than take a loss; keep
-  winners shorter and exit earlier.
+- **Policy:** one schedule for **every** strategy, asset tier and regime —
+  `BE 0.35R / LOCK 0.6R locking +0.35R / TRAIL 1.0R trailing 0.5R`
+  (owner directive 2026-08-07, superseding the 2026-08-06 adaptive-only floor).
+  Family profiles, keyword fallbacks, tier offsets and regime buckets are
+  removed; the owner's rationale is to take profits earlier and trail tightly.
 - **Enforcement, three layers:**
-  1. `getTrailingPolicy` pins the schedule after every resolution step in
-     `src/domain/trading/trailingPolicy.js` (the post-resolution floor);
-  2. `resolveOptimizedTrailingPolicy` returns `null` for any pinned cell, so
-     a saved optimizer model — including stale pre-deploy rows — can never
+  1. `getTrailingPolicy` returns the unified schedule for every call in
+     `src/domain/trading/trailingPolicy.js` (no strategy/tier branching);
+  2. `resolveOptimizedTrailingPolicy` returns `null` unconditionally, so a
+     saved optimizer model — including stale pre-deploy rows — can never
      override the schedule at runtime;
-  3. `optimizerCore.js` forces every pinned proposal to `status: BASELINE`
-     with `activation_block: 'PERMANENT_PINNED_SCHEDULE'`; no ACTIVE/OBSERVE
-     cell exists for adaptive strategies anymore.
+  3. `isPinnedTrailingPolicyCell` returns `true` for every cell, so
+     `optimizerCore.js` forces any ACTIVE/OBSERVE regime or BTC-context
+     proposal to `status: BASELINE` with
+     `activation_block: 'PERMANENT_PINNED_SCHEDULE'`.
 - The shadow `rollback` lane in `local-daemon/src/domain/analytics/liveTradePath.js`
   resolves to the same pinned policy; there is no divergent rollback schedule.
-- History for rollback/debug only (superseded 2026-08-06): the 2026-08-03
-  Adaptive Short observation schedule was
-  `0.55/0.60/0.65/0.70 BE`, `LOCK 1.00–1.20 / +0.35–0.40`, `TRAIL 1.50–1.80R /
-  0.60–0.75R` per tier; the pre-observation keyword+offset schedule was Tier 1
-  `0.75 / 1.40 / +0.80 / 2.35 / 1.10R`, Tier 2 `0.80 / 1.50 / +0.80 / 2.50 /
-  1.20R`, Tier 3 `0.90 / 1.65 / +0.80 / 2.70 / 1.35R`, Tier 4 `0.95 / 1.75 /
-  +0.80 / 2.85 / 1.50R`.
-- Adaptive observation evidence (`PARTIAL`, Tier 1 `n=2`, Tier 2 `n=9`,
-  Tier 3 `n=9`, Tier 4 `n=6`) is archived; the temporary overrides and the
-  handoff rule are removed because the owner made the pinned schedule
-  permanent policy. Re-opening this schedule requires a new owner directive.
+- History for rollback/debug only: the 2026-08-06 adaptive floor was
+  `BE 0.40R / LOCK 1.00R / +0.35R / TRAIL 1.50R / 0.60R`; before that,
+  family/tier keyword schedules existed (see the 2026-08-03 observation
+  schedule and pre-observation per-tier values below). Re-opening this
+  schedule requires a new owner directive.
 
 ## 7. Binance REST rate-limit contract
 

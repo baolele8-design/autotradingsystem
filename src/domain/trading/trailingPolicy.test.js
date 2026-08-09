@@ -7,72 +7,49 @@ import {
   resolveOptimizedTrailingPolicy
 } from './trailingPolicy.js';
 
-test('resolves trailing policy using strategy family catalog', () => {
-  // VOL_COMPRESSION_IGNITION is STRUCTURAL_BREAKOUT family (base: be 0.55, lock 1.10, lockAmt 0.55, trail 2.20, dist 0.90)
-  // Tier 1 offset: be -0.05, lock -0.10, trail -0.15, dist -0.10
+const UNIFIED = {
+  beTrigger: 0.35,
+  lockTrigger: 0.6,
+  lockAmount: 0.35,
+  trailTrigger: 1.0,
+  trailDist: 0.5
+};
+
+test('uses the unified schedule for every strategy family and tier (directive 2026-08-07)', () => {
   const breakoutPolicy = getTrailingPolicy('VOL_COMPRESSION_IGNITION', 'Tier 1: Ultra-Liquid');
-  assert.equal(Math.round(breakoutPolicy.beTrigger * 100) / 100, 0.50);
-  assert.equal(Math.round(breakoutPolicy.lockTrigger * 100) / 100, 1.00);
-  assert.equal(breakoutPolicy.lockAmount, 0.55);
-  assert.equal(Math.round(breakoutPolicy.trailTrigger * 100) / 100, 2.05);
-  assert.equal(Math.round(breakoutPolicy.trailDist * 100) / 100, 0.80);
+  assert.deepEqual(breakoutPolicy, UNIFIED);
 
-  // VOLATILITY_EXTREME_FADE is MEAN_REVERSION family
-  // Tier 1 offset: be -0.05, lock -0.10, trail -0.15, dist -0.10
   const meanReversionPolicy = getTrailingPolicy('VOLATILITY_EXTREME_FADE', 'Tier 1: Ultra-Liquid');
-  assert.equal(Math.round(meanReversionPolicy.beTrigger * 100) / 100, 0.35);
-  assert.equal(Math.round(meanReversionPolicy.lockTrigger * 100) / 100, 0.70);
-  assert.equal(meanReversionPolicy.lockAmount, 0.45);
-  assert.equal(Math.round(meanReversionPolicy.trailTrigger * 100) / 100, 1.35);
-  assert.equal(Math.round(meanReversionPolicy.trailDist * 100) / 100, 0.45);
-});
+  assert.deepEqual(meanReversionPolicy, UNIFIED);
 
-test('applies tier offsets to family-based trailing policies', () => {
-  // Tier 4 gets offset: be +0.15, lock +0.25, trail +0.35, dist +0.30
-  // VOL_COMPRESSION_IGNITION base: be 0.55, lock 1.10, trail 2.20, dist 0.90
   const tier4Policy = getTrailingPolicy('VOL_COMPRESSION_IGNITION', 'Tier 4: Nano/High-Risk');
-  assert.equal(Math.round(tier4Policy.beTrigger * 100) / 100, 0.70);
-  assert.equal(Math.round(tier4Policy.lockTrigger * 100) / 100, 1.35);
-  assert.equal(Math.round(tier4Policy.trailTrigger * 100) / 100, 2.55);
-  assert.equal(Math.round(tier4Policy.trailDist * 100) / 100, 1.20);
-});
+  assert.deepEqual(tier4Policy, UNIFIED);
 
-test('falls back gracefully to legacy keyword matching when strategy is unknown', () => {
   const legacyPolicy = getTrailingPolicy('UNKNOWN_STRATEGY_FOO', 'Tier 2: Liquid Majors');
-  // Fallback to default (0.50, 1.00, 0.50, 2.00, 1.00) with Tier 2 (no offset)
-  assert.equal(legacyPolicy.beTrigger, 0.50);
-  assert.equal(legacyPolicy.lockTrigger, 1.00);
+  assert.deepEqual(legacyPolicy, UNIFIED);
 });
 
-test('temporarily lowers only Adaptive Short Tier 3 LOCK for observation', () => {
+test('applies the unified schedule to adaptive strategies including Tier 3', () => {
   const observedPolicy = getTrailingPolicy(
     'ADAPTIVE_SHORT_FALLBACK [BOT]',
     'Tier 3: Mid-Cap Equities'
   );
-  assert.deepEqual(observedPolicy, {
-    beTrigger: 0.9,
-    lockTrigger: 1.2,
-    lockAmount: 0.5,
-    trailTrigger: 2.7,
-    trailDist: 1.3499999999999999
-  });
+  assert.deepEqual(observedPolicy, UNIFIED);
 
   const adaptiveLongTier3 = getTrailingPolicy(
     'ADAPTIVE_LONG_FALLBACK [BOT]',
     'Tier 3: Mid-Cap Equities'
   );
-  assert.equal(adaptiveLongTier3.lockTrigger, 1.65);
-  assert.equal(adaptiveLongTier3.lockAmount, 0.8);
+  assert.deepEqual(adaptiveLongTier3, UNIFIED);
 
   const adaptiveShortTier2 = getTrailingPolicy(
     'ADAPTIVE_SHORT_FALLBACK [BOT]',
     'Tier 2: Liquid Majors'
   );
-  assert.equal(adaptiveShortTier2.lockTrigger, 1.5);
-  assert.equal(adaptiveShortTier2.lockAmount, 0.8);
+  assert.deepEqual(adaptiveShortTier2, UNIFIED);
 });
 
-test('resolves only an ACTIVE optimizer trailing cell for the matching regime', () => {
+test('never resolves an optimizer trailing cell (all cells pinned)', () => {
   const active = {
     beTrigger: 0.8,
     lockTrigger: 1.1,
@@ -101,14 +78,14 @@ test('resolves only an ACTIVE optimizer trailing cell for the matching regime', 
     }
   };
 
-  assert.deepEqual(
+  assert.equal(
     resolveOptimizedTrailingPolicy(
       model,
       'ADAPTIVE_LONG_FALLBACK [BOT]',
       'Tier 2',
       'Expansion'
     ),
-    active
+    null
   );
   assert.equal(
     resolveOptimizedTrailingPolicy(
@@ -177,11 +154,11 @@ test('uses a validated optimizer override without changing the baseline resolver
   assert.equal(decision.targetSl, 102.5);
   assert.equal(
     getTrailingPolicy('ADAPTIVE_LONG_FALLBACK', 'Tier 2').lockTrigger,
-    1.5
+    0.6
   );
 });
 
-test('prefers an ACTIVE BTC-context proposal and falls back to coin regime', () => {
+test('never resolves a BTC-context optimizer proposal (all cells pinned)', () => {
   const parent = {
     beTrigger: 0.8,
     lockTrigger: 1.2,
@@ -224,7 +201,7 @@ test('prefers an ACTIVE BTC-context proposal and falls back to coin regime', () 
     }
   };
 
-  assert.deepEqual(
+  assert.equal(
     resolveOptimizedTrailingPolicy(
       model,
       'ADAPTIVE_LONG_FALLBACK',
@@ -232,9 +209,9 @@ test('prefers an ACTIVE BTC-context proposal and falls back to coin regime', () 
       'Range',
       'BULLISH_TREND'
     ),
-    btcSpecific
+    null
   );
-  assert.deepEqual(
+  assert.equal(
     resolveOptimizedTrailingPolicy(
       model,
       'ADAPTIVE_LONG_FALLBACK',
@@ -242,6 +219,6 @@ test('prefers an ACTIVE BTC-context proposal and falls back to coin regime', () 
       'Range',
       'RANGE'
     ),
-    parent
+    null
   );
 });

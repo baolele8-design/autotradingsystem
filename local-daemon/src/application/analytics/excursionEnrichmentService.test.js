@@ -76,7 +76,7 @@ test('enriches lifecycle MFE/MAE from complete one-minute candles', async () => 
   assert.deepEqual(supabase.updates[0].values, {
     max_adverse_excursion_usd: -20,
     max_favorable_excursion_usd: 50,
-    metric_version: 'binance-1m-lifecycle/v1'
+    metric_version: 'binance-1m-lifecycle-path/v2'
   });
 });
 

@@ -128,7 +128,12 @@ export function createBinanceRequestGovernor({
             ...cost,
             priority
           });
-          if (!reservation.allowed) return cached?.value ?? null;
+          if (!reservation.allowed) {
+            console.warn(
+              `[BINANCE GATEWAY] fetchJson null (rate-budget-denied) url=${url} reason=${reservation.reason ?? 'unknown'}`
+            );
+            return cached?.value ?? null;
+          }
 
           let response;
           try {
@@ -136,8 +141,14 @@ export function createBinanceRequestGovernor({
               headers,
               signal: AbortSignal.timeout(requestTimeoutMs)
             });
-          } catch {
-            if (attempt >= maxRetries) return cached?.value ?? null;
+          } catch (error) {
+            if (attempt >= maxRetries) {
+              const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+              console.warn(
+                `[BINANCE GATEWAY] fetchJson null (${isTimeout ? 'timeout' : 'network-error'}) url=${url} attempt=${attempt} error=${error?.message ?? String(error)}`
+              );
+              return cached?.value ?? null;
+            }
             await sleep(200 * 2 ** attempt);
             continue;
           }
@@ -148,11 +159,22 @@ export function createBinanceRequestGovernor({
           });
 
           if (response.status === 429 || response.status === 418) {
+            console.warn(
+              `[BINANCE GATEWAY] fetchJson null (rate-limited) url=${url} status=${response.status}${response.status === 418 ? ' ip-banned' : ''}`
+            );
             return cached?.value ?? null;
           }
 
           if (response.ok) {
-            const value = await response.json();
+            let value;
+            try {
+              value = await response.json();
+            } catch (error) {
+              console.warn(
+                `[BINANCE GATEWAY] fetchJson json-parse-failed url=${url} status=${response.status} error=${error?.message ?? String(error)}`
+              );
+              throw error;
+            }
             if (parsedUrl.pathname.endsWith('/exchangeInfo')) {
               await rateCoordinator.updateLimitsFromExchangeInfo({
                 ...value,
@@ -171,11 +193,17 @@ export function createBinanceRequestGovernor({
           }
 
           if (response.status < 500 || attempt >= maxRetries) {
+            console.warn(
+              `[BINANCE GATEWAY] fetchJson null (http-error) url=${url} status=${response.status}${response.status === 403 ? ' forbidden' : ''} attempt=${attempt} maxRetries=${maxRetries}`
+            );
             return cached?.value ?? null;
           }
 
           await sleep(200 * 2 ** attempt);
         }
+        console.warn(
+          `[BINANCE GATEWAY] fetchJson null (retries-exhausted) url=${url} maxRetries=${maxRetries}`
+        );
         return cached?.value ?? null;
       } finally {
         releaseSlot();

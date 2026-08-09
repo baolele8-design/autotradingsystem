@@ -6,73 +6,27 @@ import {
     getTrailingPolicy
 } from './trailingPolicy.js';
 
-test('keeps every existing strategy threshold unchanged', () => {
-    assert.deepEqual(getTrailingPolicy('LEAD-LAG', 'TIER 2'), {
-        beTrigger: 0.35,
-        lockTrigger: 0.8,
-        lockAmount: 0.5,
-        trailTrigger: 1.5,
-        trailDist: 0.5
-    });
-    assert.deepEqual(getTrailingPolicy('GAMMA', 'TIER 2'), {
-        beTrigger: 0.45,
-        lockTrigger: 0.9,
-        lockAmount: 0.5,
-        trailTrigger: 1.6,
-        trailDist: 0.55
-    });
-    assert.deepEqual(getTrailingPolicy('LIQ-FLUSH', 'TIER 2'), {
-        beTrigger: 0.5,
-        lockTrigger: 1,
-        lockAmount: 0.5,
-        trailTrigger: 1.8,
-        trailDist: 0.7
-    });
-    assert.deepEqual(getTrailingPolicy('KINETIC', 'TIER 2'), {
-        beTrigger: 0.6,
-        lockTrigger: 1.2,
-        lockAmount: 0.6,
-        trailTrigger: 2,
-        trailDist: 0.8
-    });
-    assert.deepEqual(getTrailingPolicy('SFP', 'TIER 2'), {
-        beTrigger: 0.6,
-        lockTrigger: 1.2,
-        lockAmount: 0.6,
-        trailTrigger: 2,
-        trailDist: 0.8
-    });
-    assert.deepEqual(getTrailingPolicy('ADAPTIVE', 'TIER 2'), {
-        beTrigger: 0.8,
-        lockTrigger: 1.5,
-        lockAmount: 0.8,
-        trailTrigger: 2.5,
-        trailDist: 1.2
-    });
+const UNIFIED = {
+    beTrigger: 0.35,
+    lockTrigger: 0.6,
+    lockAmount: 0.35,
+    trailTrigger: 1.0,
+    trailDist: 0.5
+};
+
+test('uses the unified schedule for every strategy (directive 2026-08-07)', () => {
+    assert.deepEqual(getTrailingPolicy('LEAD-LAG', 'TIER 2'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('GAMMA', 'TIER 2'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('LIQ-FLUSH', 'TIER 2'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('KINETIC', 'TIER 2'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('SFP', 'TIER 2'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('ADAPTIVE', 'TIER 2'), UNIFIED);
 });
 
-test('keeps tier adjustments unchanged', () => {
-    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 4'), {
-        beTrigger: 0.65,
-        lockTrigger: 1.25,
-        lockAmount: 0.5,
-        trailTrigger: 2.35,
-        trailDist: 1.3
-    });
-    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 3'), {
-        beTrigger: 0.6,
-        lockTrigger: 1.15,
-        lockAmount: 0.5,
-        trailTrigger: 2.2,
-        trailDist: 1.15
-    });
-    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 1'), {
-        beTrigger: 0.45,
-        lockTrigger: 0.9,
-        lockAmount: 0.5,
-        trailTrigger: 1.85,
-        trailDist: 0.9
-    });
+test('uses the same schedule for every asset tier', () => {
+    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 4'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 3'), UNIFIED);
+    assert.deepEqual(getTrailingPolicy('DEFAULT', 'TIER 1'), UNIFIED);
 });
 
 test('moves a long trade through BE, LOCK and TRAIL using immutable R', () => {
@@ -89,12 +43,12 @@ test('moves a long trade through BE, LOCK and TRAIL using immutable R', () => {
     assert.equal(be.targetSl, 100.25);
 
     const lock = calculateTrailingDecision({ ...common, markPrice: 105 });
-    assert.equal(lock.nextStage, 'LOCK');
+    assert.equal(lock.nextStage, 'TRAIL');
     assert.equal(lock.targetSl, 102.5);
 
     const trail = calculateTrailingDecision({ ...common, markPrice: 110 });
     assert.equal(trail.nextStage, 'TRAIL');
-    assert.equal(trail.targetSl, 105);
+    assert.equal(trail.targetSl, 107.5);
 });
 
 test('mirrors stop calculations for short trades', () => {
@@ -109,7 +63,7 @@ test('mirrors stop calculations for short trades', () => {
 
     assert.equal(decision.nextStage, 'TRAIL');
     assert.equal(decision.highWaterPrice, 90);
-    assert.equal(decision.targetSl, 95);
+    assert.equal(decision.targetSl, 92.5);
 });
 
 test('never regresses a previously achieved stage after a retracement', () => {
@@ -125,7 +79,7 @@ test('never regresses a previously achieved stage after a retracement', () => {
 
     assert.equal(decision.currentProfitR, 0.8);
     assert.equal(decision.nextStage, 'TRAIL');
-    assert.equal(decision.targetSl, 107);
+    assert.equal(decision.targetSl, 109.5);
 });
 
 test('recovers TRAIL from persisted high-water even if current price retraced', () => {
@@ -142,6 +96,6 @@ test('recovers TRAIL from persisted high-water even if current price retraced', 
     assert.equal(decision.currentProfitR, 1.5);
     assert.equal(decision.highWaterR, 2.4);
     assert.equal(decision.nextStage, 'TRAIL');
-    assert.equal(decision.targetSl, 107);
+    assert.equal(decision.targetSl, 109.5);
 });
 
