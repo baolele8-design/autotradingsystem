@@ -3,3 +3,6 @@ dist/
 .env
 .DS_Store
 local-daemon/data/mvrv-cache.json
+daemon.log
+vite.log
+
