@@ -343,7 +343,7 @@ export async function syncBinanceLedger(context, isSilent = false) {
                     
                     try {
                         const durationMs = exitTime.getTime() - logStartTime;
-                        let klineInterval = '1m'; // Mặc định Scalp (< 15h)
+                        let klineInterval = '1m'; // Mặc định cho thời gian giữ ngắn (< 15h)
                         
                         // Co giãn khung thời gian tự động để bảo vệ Weight Limit (< 1000 nến)
                         if (durationMs > 10 * 24 * 60 * 60 * 1000) klineInterval = '1h';       // > 10 ngày

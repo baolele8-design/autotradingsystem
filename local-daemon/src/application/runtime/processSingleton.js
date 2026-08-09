@@ -34,7 +34,7 @@ export function acquireProcessSingleton(
     );
     if (isProcessAlive(ownerPid)) {
       throw new Error(
-        `Scalp bot đã chạy với PID ${ownerPid}; từ chối process thứ hai`,
+        `Bot đã chạy với PID ${ownerPid}; từ chối process thứ hai`,
         { cause: error }
       );
     }

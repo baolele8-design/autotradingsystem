@@ -9,7 +9,6 @@ navigation aids; module/function names are the durable references.
 |---|---|---|
 | Main daemon | `local-daemon/server.js` -> `local-daemon/src/bootstrap.js` | One HTTP server with WebSocket attached; default `PORT=1338` |
 | Legacy auto-bot | import side effect from `bootstrap.js` | Connects to `ws://localhost:1338`, consumes `SCAN_RESULTS`, places main automated trades |
-| Scalp bot | `local-daemon/scalpBot.js` -> `application/scalping/scalpEngine.js` | Separate process, Binance client, caches, lifecycle, and optimizer |
 | Frontend | `index.html` -> `src/main.jsx` -> `src/app/AntiFragileTerminal.jsx` | React UI; can use daemon HTTP execution routes and write Supabase through feature modules |
 
 There is no separate HTTP port 3001 in current source. `PORT` may override 1338,
@@ -190,41 +189,6 @@ checks position mode, and posts each order. Conditional Futures orders receive
 
 Other mutation routes include owned-orphan cleanup and symbol-wide cancel-all.
 
-### Scalp process
-
-Scalp has an independent architecture:
-
-```text
-Binance kline WS + REST
-  -> scalp signals (5m/15m/1h)
-  -> independent capital/risk sizing
-  -> LIMIT entry + attempted SL/TP
-  -> scalp_trade_logs + in-memory openTrades
-  -> 15s monitor for fill/close/trailing/temporal exit
-  -> restart recovery from scalp_trade_logs + positionRisk
-```
-
-Current configuration is `$280` virtual capital, `$35` margin label per trade,
-up to 8 positions, with leverage/risk settings per timeframe. The older `$140`
-claim is false.
-
-Scalp shares no lock with the main daemon. If dedicated scalp credentials are
-absent, environment configuration falls back to the main trade credentials.
-
-Scalp's Binance gateway reserves request weight and order count through
-loopback-only daemon routes before every REST request. If the daemon coordinator
-is unavailable, scalp REST calls fail closed before reaching Binance. Main,
-legacy auto-bot, HTTP bridge, and scalp therefore share one precharged budget
-while they run through the documented entry points.
-
-At main-daemon boot, normal lanes remain closed until a single weight-1 time
-probe observes Binance's current counters. The coordinator is RAM state, so
-this warm-up is repeated after every restart.
-
-Scalp trailing does not implement the main service's verified
-POST-before-delete algorithm. Its broad cleanup can delete all standard and
-algo orders for a symbol.
-
 ### Frontend persistence
 
 `src/features/trading-workspace/application/tradeLedger.js` also inserts and
@@ -235,16 +199,13 @@ as the only writers are incomplete.
 
 | State | Location | Owner(s) | Restart behavior |
 |---|---|---|---|
-| Market candles/marks | RAM | market cache; separate scalp caches | Refilled from REST/WS |
+| Market candles/marks | RAM | market cache | Refilled from REST/WS |
 | Main cooldowns | RAM | legacy auto-bot | Lost |
 | Main symbol lock | RAM | protection service | Lost |
-| Scalp open trades/cooldowns | RAM | scalp engine | Rows partly recovered; cooldowns lost |
 | Main lifecycle/risk geometry | Supabase `trade_logs` | auto-bot, scanner, ledger, protection, frontend actions | Queried after boot; missing rows are not reconstructed |
-| Scalp lifecycle | Supabase `scalp_trade_logs` | scalp engine | Matching active rows associated to live positions |
 | Exchange positions/orders | Binance | every execution surface/manual actor | Survive daemon restart |
 | Main optimizer models | Supabase `system_models` | optimizer writes; runtime/frontend read | Latest model loaded |
-| Scalp parameters | Supabase `scalp_strategy_params` | scalp optimizer/engine | Reloaded |
-| Binance REST budget | Main-daemon RAM | shared coordinator; scalp uses loopback IPC | Lost/reset at daemon restart; response headers reconcile upward |
+| Binance REST budget | Main-daemon RAM | shared coordinator | Lost/reset at daemon restart; response headers reconcile upward |
 
 No single store has complete trade identity and lifecycle truth.
 
@@ -259,7 +220,6 @@ No single store has complete trade identity and lifecycle truth.
 | `trading/orderOwnershipService.js` | shared trade-specific SL/TP cancellation references |
 | `trading/protectionService.js` | temporal market close and verified main trailing replacement |
 | `trading/orphanCleanupService.js` | owned orphan/duplicate conditional-order deletion |
-| `scalping/scalpEngine.js` | scalp entry, SL/TP, trailing additions, market close, broad cleanup |
 
 Any change to order ownership, hedge mode, or symbol locking must audit every
 row in this table.

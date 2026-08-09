@@ -1,5 +1,5 @@
 -- Chạy SQL này trong Supabase SQL Editor để thêm cột btc_regime_at_entry
--- vào bảng trade_logs và scalp_trade_logs
+-- vào bảng trade_logs
 
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS btc_regime_at_entry TEXT;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS btc_regime TEXT;
@@ -25,9 +25,3 @@ ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mfe_usd NUMERIC;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mae_usd NUMERIC;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mfe_candles INTEGER;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mae_candles INTEGER;
-
-ALTER TABLE scalp_trade_logs ADD COLUMN IF NOT EXISTS btc_regime_at_entry TEXT;
-ALTER TABLE scalp_trade_logs ADD COLUMN IF NOT EXISTS btc_regime TEXT;
-ALTER TABLE scalp_trade_logs ADD COLUMN IF NOT EXISTS regime_at_entry TEXT;
-ALTER TABLE scalp_trade_logs ADD COLUMN IF NOT EXISTS close_price NUMERIC;
-ALTER TABLE scalp_trade_logs ADD COLUMN IF NOT EXISTS close_time TIMESTAMPTZ;

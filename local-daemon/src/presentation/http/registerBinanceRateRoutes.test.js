@@ -29,7 +29,7 @@ function makeResponse() {
   };
 }
 
-test('central route atomically pre-charges concurrent scalp reservations', async () => {
+test('central route atomically pre-charges concurrent reservations', async () => {
   const coordinator = createBinanceRateCoordinator({
     limits: {
       orderCount10s: 100,

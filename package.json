@@ -7,7 +7,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "start:daemon": "npm --prefix local-daemon start",
-    "start:scalp": "node local-daemon/scalpBot.js",
     "test": "node --test \"src/**/*.test.js\" \"local-daemon/**/*.test.js\"",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check": "npm run test && npm run check:architecture && npm run build"

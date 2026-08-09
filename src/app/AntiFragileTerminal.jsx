@@ -374,7 +374,7 @@ export default function AntiFragileTerminal() {
               ))}
             </select>
             <select className="bg-black text-blue-400 font-bold px-3 py-1.5 rounded border border-slate-700/50 outline-none text-sm cursor-pointer" value={intervalTime} onChange={(e) => setIntervalTime(e.target.value)}>
-              <option value="5m">M5 (Scalp)</option><option value="15m">M15 (Day)</option><option value="1h">H1 (Swing)</option>
+              <option value="5m">M5 (Ngắn hạn)</option><option value="15m">M15 (Day)</option><option value="1h">H1 (Swing)</option>
               <option value="4h">H4 (Macro)</option><option value="1d">D1 (Trend)</option>
             </select>
             <div className="px-3 border-l border-slate-700/50">

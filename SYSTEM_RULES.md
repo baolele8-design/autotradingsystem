@@ -28,7 +28,7 @@ Limits:
   margin. Documentation must not call it both.
 - The available-balance check is not repeated after each order in a batch.
 - The snapshot and in-memory `isProcessing` flag do not lock against the
-  separate scalp process, frontend execution, manual activity, or another
+  frontend execution, manual activity, or another
   daemon process.
 - Conditional orders are not included in occupied notional.
 
@@ -41,7 +41,7 @@ within a batch.
 Evidence: `autoBot.js:91-113`,
 `local-daemon/src/domain/execution/setupSelection.js:20-81`.
 
-This is snapshot-based, not an exchange-wide atomic invariant. Main, scalp,
+This is snapshot-based, not an exchange-wide atomic invariant. Main,
 frontend, and manual paths have no shared cross-process symbol lock.
 
 ### 1.3 Risk-at-stop downsizing — PARTIAL
@@ -170,8 +170,7 @@ Evidence: `ledgerSyncService.js:99-151`,
 `local-daemon/src/application/trading/protectionService.js:188-207`.
 
 This is enforced for successfully reconciled rows, but it does not prove the
-position is the intended fill. Scalp instead persists initial R from its
-requested prices before fill and uses an in-memory fallback of 1% if invalid.
+position is the intended fill.
 
 ## 4. Stop loss, take profit, and order ownership
 
@@ -216,15 +215,14 @@ strategy-family and asset-tier dependent; they are not universally
 
 ### 4.4 Initial SL/TP — PARTIAL
 
-Main and scalp entry paths attempt one `STOP_MARKET` and one
+Main entry paths attempt one `STOP_MARKET` and one
 `TAKE_PROFIT_MARKET` conditional algo order with reduction semantics and mark
 price protection.
 
-Evidence: `autoBot.js:270-286`,
-`local-daemon/src/application/scalping/scalpEngine.js:573-607`.
+Evidence: `autoBot.js:270-286`.
 
-“Placed alongside entry” does not mean guaranteed active. Both paths continue
-after protection failure, and neither verifies the initial orders.
+“Placed alongside entry” does not mean guaranteed active. The path continues
+after protection failure, and does not verify the initial orders.
 
 ### 4.5 Order ownership and symbol-wide deletion — REQUIRED / GAP
 
@@ -235,11 +233,10 @@ preallocated `trade_logs.id`; main trailing keeps the same trade token.
 Evidence: `trailingOrders.js:1-68`.
 
 Main auto-bot initial protection, main trailing replacements, and frontend
-batch conditional orders receive this tag. Scalp initial protection does not,
-so orphan cleanup still cannot identify every engine-created protection.
+batch conditional orders receive this tag.
 
 Several paths call `DELETE /fapi/v1/allOpenOrders` for a symbol: main preflight,
-ledger cleanup, scanner invalidation/panic, HTTP cancel-all, and scalp cleanup.
+ledger cleanup, scanner invalidation/panic, and HTTP cancel-all.
 That endpoint is not trade-specific and can cancel manual or other-engine
 standard orders.
 
@@ -251,18 +248,8 @@ main protection, orphan cleanup, and one HTTP cleanup route.
 Evidence: `protectionService.js:31-48`.
 
 It is not used by main entry, ledger cancellation, scanner panic/invalidation,
-HTTP batch placement/cancel-all, or scalp. It is neither queued nor
+or HTTP batch placement/cancel-all. It is neither queued nor
 cross-process and vanishes on restart.
-
-### 4.7 Scalp trailing safety claim — FALSE in prior documentation/comments
-
-Scalp trailing posts a new SL and a new TP, but does not verify the new SL and
-does not delete the prior SL in that flow. It then advances in-memory and
-database state even if the POST block threw.
-
-Evidence: `scalpEngine.js:850-930`.
-
-The comment claiming “POST -> verify -> DELETE” is not implemented.
 
 ## 5. Pending orders and temporal exits
 
@@ -289,7 +276,7 @@ sets the row to `CLOSED`.
 Evidence: `protectionService.js:209-330`.
 
 Cleanup after the close only deletes `qts-` owned SL/TP discovered from the
-exchange. Legacy untagged main orders and untagged scalp orders may remain
+exchange. Legacy untagged main orders may remain
 until another path cancels them. A successful market close and successful
 database update are separate operations.
 
@@ -386,25 +373,12 @@ Evidence: `bootstrap.js:83-107`,
 `local-daemon/src/config/environment.js:16-31`.
 
 This prevents two main instances from binding the same host/port. It does not
-lock the Binance account, prevent a different `PORT`, or cover scalp processes.
+lock the Binance account or prevent a different `PORT`.
 
-### 7.3 Scalp recovery — PARTIAL
-
-Scalp boot loads `PENDING`/`OPEN` rows from `scalp_trade_logs` and associates
-them with live positions by symbol/direction. Positions without matching rows
-are warned about but not adopted.
-
-Evidence: `scalpEngine.js:1104-1185`.
-
-Recovered records do not restore persisted `sl_algo_id`/`tp_algo_id` into the
-in-memory trade object, so later trade-specific cancellation can lack IDs.
-
-### 7.4 Binance REST rate control — ENFORCED for documented live processes
+### 7.3 Binance REST rate control — ENFORCED for documented live processes
 
 Main services, legacy auto-bot, and the HTTP Binance bridge precharge a shared
-daemon coordinator before every Binance REST call. Scalp is a separate process
-and reserves against the same coordinator through loopback-only HTTP routes;
-if that coordinator is unavailable, scalp REST requests fail closed.
+daemon coordinator before every Binance REST call.
 
 The coordinator tracks `REQUEST_WEIGHT` plus 10-second and one-minute `ORDERS`,
 reconciles response headers upward, and blocks all lanes after HTTP 429/418 for
@@ -466,9 +440,6 @@ for `ACTIVE`. Missing, unknown, insufficient, or invalid BTC context falls
 back to the parent proposal or deterministic trailing policy. The temporary
 Adaptive Short Tier 3 observation override remains non-promotable.
 
-Scalp optimization is separate and runs every 30 minutes inside
-`scalpEngine.js`.
-
 ## 9. Dangerous assumptions register
 
 Do not assume any of the following without a code change and dedicated tests:
@@ -476,7 +447,7 @@ Do not assume any of the following without a code change and dedicated tests:
 1. An accepted entry always has an active, verified SL and TP.
 2. `$55` means margin rather than notional.
 3. Requested entry/SL risk equals actual filled and quantized risk.
-4. Main, scalp, frontend, and manual trading share a lock or ownership ledger.
+4. Main, frontend, and manual trading share a lock or ownership ledger.
 5. A symbol identifies one trade, especially in hedge mode or after restart.
 6. `allOpenOrders` cleanup is scoped to one strategy/trade.
 7. Every engine order has a `qts-` ownership tag or persisted algo ID.

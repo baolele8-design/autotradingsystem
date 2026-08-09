@@ -33,7 +33,7 @@ risk model, PnL calculation, optimizer input, or state transition:
 - Write down inputs, outputs, units, sign conventions, allowed ranges,
   rounding direction, precision, boundary behavior, and failure behavior.
 - Find every implementation and consumer. Do not assume similarly named
-  frontend, main-daemon, and scalp functions have identical contracts.
+  frontend and main-daemon functions have identical contracts.
 - Preserve existing behavior with characterization tests before refactoring.
 - Add tests for normal cases, zero, negative/invalid values, exact boundaries,
   just-below/just-above boundaries, extreme finite values, and rounding/tick or

@@ -56,9 +56,6 @@ Main daemon:
 bootstrap -> scanner / ledger / protection / orphan cleanup / optimizer
           -> Binance + Supabase
           -> legacy autoBot through the daemon WebSocket
-
-Separate process:
-scalpBot -> scalpEngine -> Binance + Supabase
 ```
 
 - The operational system spans four distinct boundaries: Binance, Supabase,
@@ -76,11 +73,9 @@ scalpBot -> scalpEngine -> Binance + Supabase
   current source.
 - `local-daemon/src/legacy/autoBot.js` starts as an import side effect and opens
   a WebSocket to `ws://localhost:1338`.
-- `local-daemon/scalpBot.js` is a separate process. The main daemon port lock
-  does not prevent multiple scalp processes or one main plus one scalp process.
 - `src/domain/` and `local-daemon/src/domain/` contain calculation/policy code,
-  but “zero external dependencies” is too broad: tests import Node modules and
-  daemon scalp domain code imports frontend domain code. The architecture check
+  but “zero external dependencies” is too broad: tests import Node modules.
+  The architecture check
   only forbids selected inward-to-outer relative imports.
 
 ## 4. Critical execution surfaces
@@ -98,7 +93,6 @@ together when ownership, lifecycle, risk, or order contracts change.
 | Main protection | `local-daemon/src/application/trading/protectionService.js` | Main trailing replacement and temporal market close |
 | Orphan/duplicate cleanup | `local-daemon/src/application/trading/orphanCleanupService.js` | Deletes only recognized engine-owned conditional orders and prunes duplicates |
 | Main order helpers | `local-daemon/src/domain/orders/trailingOrders.js` | Direction matching, ownership tags, price quantization, POST/verify-before-delete helper |
-| Scalp process | `local-daemon/src/application/scalping/scalpEngine.js` | Separate sizing, entry, persistence, monitoring, trailing, cleanup, and restart recovery |
 | Optimizer runner/core | `local-daemon/src/application/optimization/optimizer.js`, `optimizerCore.js` | Reads resolved live/paper rows, filters them, writes a model at main-daemon boot |
 | Frontend ledger actions | `src/features/trading-workspace/application/tradeLedger.js` | Additional `trade_logs` inserts/updates initiated by UI workflows |
 
@@ -120,23 +114,22 @@ together when ownership, lifecycle, risk, or order contracts change.
 
 - Treat “entry accepted”, “position filled”, “SL verified”, “TP verified”, and
   “ledger row persisted” as separate states.
-- Never assume `PENDING -> OPEN -> CLOSED -> WIN/LOSS` is universal. The main
+-   Never assume `PENDING -> OPEN -> CLOSED -> WIN/LOSS` is universal. The main
   ledger commonly resolves `OPEN` directly to `WIN`/`LOSS`; `CLOSED` is an
-  intermediate state used by temporal/panic paths. Scalp has a separate state
-  machine.
+  intermediate state used by temporal/panic paths.
 - Audit partial fill, hedge mode, same-symbol manual positions, and duplicate
   rows. Symbol+direction matching is not trade-level ownership.
 
 ### SL/TP and cleanup
 
 - Main trailing replacement uses create+verify before deleting replaceable
-  stops. Initial main SL/TP placement and scalp trailing do not provide the same
+  stops. Initial main SL/TP placement does not provide the same
   guarantee.
 - `DELETE /fapi/v1/allOpenOrders` is symbol-wide for standard orders. It can
   affect manual or other-engine orders and must never be described as
   trade-specific cleanup.
 - The `qts-` client-ID ownership convention is not applied to initial orders
-  placed by `autoBot.js` or `scalpEngine.js`; orphan cleanup therefore cannot
+  placed by `autoBot.js`; orphan cleanup therefore cannot
   recognize all engine-created SL/TP orders.
 
 ### Persistence, restart, and optimizer
@@ -192,15 +185,12 @@ See `SYSTEM_RULES.md` for the full verified/gap register.
 - Every new Binance REST endpoint needs an explicit conservative entry in
   `estimateBinanceRateCost()`. Unknown endpoints intentionally fail closed, and
   HTTP proxy endpoints require an explicit allowlist entry.
-- Scalp is a separate process and must use `remoteBinanceRateCoordinator.js`
-  so its precharges land in the main daemon's shared IP budget. Coordinator
-  failure is fail-closed for scalp REST traffic.
 - Preserve the priority headroom order: market data 65%, account 75%, ordinary
   execution 85%, protection/reduce-only 95%. A change requires endpoint-weight
   evidence plus burst and 429/418 regression tests.
 - Preserve cold-start reconciliation: only one weight-1 time probe may pass
   before response headers mark the shared coordinator ready. Do not remove it
-  merely to speed up daemon/scalp restart.
+  merely to speed up daemon restart.
 - This control covers the documented live processes, not arbitrary scripts or
   other programs sharing the VPS IP. Never describe it as an exchange-wide
   guarantee without reconciling those external consumers.
@@ -214,5 +204,4 @@ npm run check:architecture
 npm run build
 npm run check
 npm --prefix local-daemon start
-npm run start:scalp
 ```

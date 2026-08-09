@@ -7,9 +7,9 @@ import { acquireProcessSingleton } from './processSingleton.js';
 
 test('process singleton rejects a live owner and replaces a stale lock', () => {
   const directory = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'scalp-lock-')
+    path.join(os.tmpdir(), 'quant-bot-lock-')
   );
-  const lockPath = path.join(directory, 'scalp.lock');
+  const lockPath = path.join(directory, 'quant-bot.lock');
   const release = acquireProcessSingleton(lockPath, {
     pid: 101,
     isProcessAlive: ownerPid => ownerPid === 101
