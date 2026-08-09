@@ -1,94 +1,106 @@
 import fs from 'fs';
 import path from 'path';
 
-// 1. Chỉ định target paths
-const targetPaths = [
-    'src', 
-    'api', 
-    'package.json', 
-    'vite.config.js', 
-    'tailwind.config.js', 
-    'index.html'
-];
+// 1. CẤU HÌNH BỘ LỌC TỰ ĐỘNG
+const rootDir = "D:\\100_Active_Projects\\107_Trading_Crypto\\03_Workspace\\sandbox";
 const outputFile = 'AI_CODEBASE.md';
 
-const allowedExtensions = ['.js', '.jsx', '.json', '.html', '.css'];
-const ignoredDirs = ['node_modules', '.git', 'dist', '.vercel', 'build'];
+// Các đuôi file được phép đọc (Thêm TS, config phổ biến)
+const allowedExtensions = ['.js', '.jsx', '.ts', '.tsx', '.json', '.html', '.css', '.scss', '.md'];
 
-// --- THÊM MỚI: HÀM VẼ SƠ ĐỒ CÂY THƯ MỤC ---
-function generateTree(currentPath, prefix = '') {
-    if (!fs.existsSync(currentPath)) return '';
+// Các file cụ thể được phép đọc (không có đuôi)
+const allowedFiles = ['.env.example', '.gitignore', 'Dockerfile'];
 
-    const stat = fs.statSync(currentPath);
-    const name = path.basename(currentPath);
+// Thư mục cần bỏ qua
+const ignoredDirs = ['node_modules', '.git', 'dist', 'build', '.vercel', '.next', 'coverage', '.vscode', '.idea'];
 
-    // Xử lý nếu là File
-    if (stat.isFile()) {
-        const ext = path.extname(currentPath);
-        if ((allowedExtensions.includes(ext) || name === '.env.example') && name !== 'package-lock.json') {
-            return `${prefix}├── ${name}\n`;
+// File cần bỏ qua (ĐẶC BIỆT QUAN TRỌNG: Bỏ qua file output và .env thật)
+const ignoredFiles = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', outputFile, '.DS_Store', '.env', '.env.local'];
+
+// --- HÀM KIỂM TRA TÍNH HỢP LỆ ---
+const isValidDir = (dirName) => !ignoredDirs.includes(dirName);
+const isValidFile = (fileName) => {
+    if (ignoredFiles.includes(fileName)) return false;
+    if (allowedFiles.includes(fileName)) return true;
+    const ext = path.extname(fileName);
+    return allowedExtensions.includes(ext);
+};
+
+// --- HÀM VẼ SƠ ĐỒ CÂY THƯ MỤC CHUYÊN NGHIỆP ---
+function generateTree(dir, prefix = '') {
+    let treeStr = '';
+    const items = fs.readdirSync(dir);
+    
+    // Lọc trước để biết chính xác số lượng item hợp lệ (dùng để vẽ nhánh cuối)
+    const validItems = items.filter(item => {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        return stat.isDirectory() ? isValidDir(item) : isValidFile(item);
+    });
+
+    validItems.forEach((item, index) => {
+        const isLast = index === validItems.length - 1;
+        const pointer = isLast ? '└── ' : '├── ';
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+
+        if (stat.isDirectory()) {
+            treeStr += `${prefix}${pointer}${item}/\n`;
+            // Nếu là thư mục cuối, khoảng trắng ở dưới; nếu không, kẻ vạch dọc
+            treeStr += generateTree(fullPath, prefix + (isLast ? '    ' : '│   '));
+        } else {
+            treeStr += `${prefix}${pointer}${item}\n`;
         }
-        return '';
-    }
+    });
 
-    // Xử lý nếu là Thư mục
-    if (stat.isDirectory()) {
-        if (ignoredDirs.includes(name)) return '';
-
-        let treeStr = `${prefix}├── ${name}/\n`;
-        const files = fs.readdirSync(currentPath);
-        files.forEach((file) => {
-            // Đệ quy chui vào trong thư mục
-            treeStr += generateTree(path.join(currentPath, file), prefix + '│   ');
-        });
-        return treeStr;
-    }
-    return '';
+    return treeStr;
 }
-// ----------------------------------------
+
+// --- HÀM LẤY NỘI DUNG FILE ĐỆ QUY ---
+function readFilesRecursively(dir) {
+    let content = '';
+    const items = fs.readdirSync(dir);
+
+    items.forEach(item => {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+
+        if (stat.isDirectory() && isValidDir(item)) {
+            content += readFilesRecursively(fullPath);
+        } else if (stat.isFile() && isValidFile(item)) {
+            const fileContent = fs.readFileSync(fullPath, 'utf8');
+            // Dùng path.relative để đường dẫn nhìn gọn gàng: src/App.jsx thay vì C:\...\src\App.jsx
+            const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+            
+            content += `=========================================\n`;
+            content += `/// FILE: ${relativePath}\n`;
+            content += `=========================================\n\n`;
+            content += fileContent + `\n\n`;
+        }
+    });
+
+    return content;
+}
+
+// ==========================================
+// THỰC THI SCRIPT
+// ==========================================
+console.log('🔍 Đang quét toàn bộ dự án...');
 
 const now = new Date();
 const timeString = now.toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit' });
 
-// 2. KHỞI TẠO NỘI DUNG VỚI SƠ ĐỒ KIẾN TRÚC
+// 1. Khởi tạo nội dung và vẽ cây
 let outputContent = `--- START OF FILE Paste ${timeString} ---\n\n`;
 outputContent += `## 📂 SƠ ĐỒ KIẾN TRÚC HỆ THỐNG HIỆN TẠI\n\`\`\`text\n`;
-
-// Vẽ cây cho từng thư mục/file target
-targetPaths.forEach(p => {
-    outputContent += generateTree(p);
-});
+outputContent += `.\n`; // Dấu chấm đại diện cho thư mục hiện tại
+outputContent += generateTree(rootDir);
 outputContent += `\`\`\`\n\n`;
+
+// 2. Gom mã nguồn
 outputContent += `## 💻 CHI TIẾT MÃ NGUỒN\n\n`;
+outputContent += readFilesRecursively(rootDir);
 
-// 3. HÀM ĐỌC NỘI DUNG FILE (Giữ nguyên của bạn)
-function readFilesRecursively(dir) {
-    if (!fs.existsSync(dir)) return;
-    
-    const stat = fs.statSync(dir);
-    
-    if (stat.isFile()) {
-        const ext = path.extname(dir);
-        const fileName = path.basename(dir);
-        
-        if ((allowedExtensions.includes(ext) || fileName === '.env.example') && fileName !== 'package-lock.json') {
-            const content = fs.readFileSync(dir, 'utf8');
-            outputContent += `=========================================\n`;
-            outputContent += `/// FILE: ${dir}\n`;
-            outputContent += `=========================================\n\n`;
-            outputContent += content;
-            outputContent += `\n\n`;
-        }
-    } else if (stat.isDirectory()) {
-        if (ignoredDirs.includes(path.basename(dir))) return;
-        const files = fs.readdirSync(dir);
-        files.forEach(file => readFilesRecursively(path.join(dir, file)));
-    }
-}
-
-// Chạy thuật toán đệ quy lấy content
-targetPaths.forEach(p => readFilesRecursively(p));
-
-// Xuất file
+// 3. Xuất file
 fs.writeFileSync(outputFile, outputContent);
-console.log(`✅ Đã gom mã nguồn và tạo Sơ đồ kiến trúc vào file ${outputFile}`);
+console.log(`✅ Đã quét xong! Toàn bộ kiến trúc và mã nguồn đã được gom vào: ${outputFile}`);

@@ -5,10 +5,12 @@ import {
     findPositionForTrade,
     getBinanceOrderType,
     isOwnedAlgoOrder,
+    isOrderOwnedByTrade,
     isStopLossOrder,
     isTakeProfitOrder,
     isStrictlyBetterStop,
     makeClientAlgoId,
+    makeExitClientOrderId,
     makeInitialClientAlgoId,
     makePositionReductionPayload,
     quantizeStopPrice,
@@ -153,6 +155,52 @@ test('creates owned client IDs that comply with Binance length limit', () => {
     assert.equal(isOwnedAlgoOrder({ clientAlgoId: initialId }), true);
     assert.ok(trailingId.length <= 36);
     assert.ok(initialId.length <= 36);
+});
+
+test('creates deterministic initial IDs owned by one trade', () => {
+    const first = makeInitialClientAlgoId(
+        'sl',
+        '62bf63c8-dcc1-4f90-a2ea-123456789012'
+    );
+    const repeated = makeInitialClientAlgoId(
+        'sl',
+        '62bf63c8-dcc1-4f90-a2ea-123456789012'
+    );
+    const second = makeInitialClientAlgoId(
+        'sl',
+        '62bf63c8-dcc1-4f90-a2ea-999999999999'
+    );
+
+    assert.equal(first, repeated);
+    assert.notEqual(first, second);
+    assert.equal(isOwnedAlgoOrder({ clientAlgoId: first }), true);
+    assert.equal(
+        isOrderOwnedByTrade(
+            { clientAlgoId: first },
+            '62bf63c8-dcc1-4f90-a2ea-123456789012'
+        ),
+        true
+    );
+    assert.equal(
+        isOrderOwnedByTrade(
+            { clientAlgoId: first },
+            '62bf63c8-dcc1-4f90-a2ea-999999999999'
+        ),
+        false
+    );
+    assert.ok(first.length <= 36);
+});
+
+test('creates deterministic owned IDs for forced lifecycle exits', () => {
+    const panic = makeExitClientOrderId('panic', 'trade-123');
+    const temporal = makeExitClientOrderId('temporal', 'trade-123');
+
+    assert.equal(panic, makeExitClientOrderId('panic', 'trade-123'));
+    assert.notEqual(panic, temporal);
+    assert.equal(isOwnedAlgoOrder({ clientOrderId: panic }), true);
+    assert.equal(isOwnedAlgoOrder({ clientOrderId: temporal }), true);
+    assert.ok(panic.length <= 36);
+    assert.ok(temporal.length <= 36);
 });
 
 test('selects the correct position side in Hedge Mode', () => {

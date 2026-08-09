@@ -59,20 +59,41 @@ export function isOwnedAlgoOrder(order) {
     return clientId.startsWith(OWNED_ALGO_PREFIX);
 }
 
-export function makeClientAlgoId(tradeId, now = Date.now()) {
-    const compactTradeId = String(tradeId || 'legacy')
+export function makeTradeOwnershipToken(tradeId) {
+    return String(tradeId || 'legacy')
         .replace(/[^A-Za-z0-9]/g, '')
-        .slice(-12) || 'legacy';
+        .slice(-20) || 'legacy';
+}
+
+export function makeClientAlgoId(tradeId, now = Date.now()) {
+    const compactTradeId = makeTradeOwnershipToken(tradeId);
     return `${OWNED_ALGO_PREFIX}sl-${compactTradeId}-${now.toString(36)}`
         .slice(0, 36);
 }
 
-export function makeInitialClientAlgoId(kind, token) {
+export function makeInitialClientAlgoId(kind, tradeId) {
     const normalizedKind = kind === 'tp' ? 'tp' : 'sl';
-    const compactToken = String(token || Date.now().toString(36))
-        .replace(/[^A-Za-z0-9]/g, '')
-        .slice(-24);
-    return `${OWNED_ALGO_PREFIX}${normalizedKind}-${compactToken}`.slice(0, 36);
+    return `${OWNED_ALGO_PREFIX}${normalizedKind}-${makeTradeOwnershipToken(tradeId)}`;
+}
+
+export function makeExitClientOrderId(kind, tradeId) {
+    const normalizedKind = kind === 'temporal' ? 'time' : 'panic';
+    return `${OWNED_ALGO_PREFIX}ex-${normalizedKind}-${makeTradeOwnershipToken(tradeId)}`
+        .slice(0, 36);
+}
+
+export function isOrderOwnedByTrade(order, tradeId) {
+    const clientId = String(
+        order?.clientAlgoId ??
+        order?.clientOrderId ??
+        ''
+    );
+    const token = makeTradeOwnershipToken(tradeId);
+    return (
+        clientId === makeInitialClientAlgoId('sl', tradeId) ||
+        clientId === makeInitialClientAlgoId('tp', tradeId) ||
+        clientId.startsWith(`${OWNED_ALGO_PREFIX}sl-${token}-`)
+    );
 }
 
 export function findPositionForTrade(positions, trade) {
@@ -160,6 +181,32 @@ export function isStrictlyBetterStop(candidate, current, tickSize, isLong) {
     return isLong
         ? candidate - current >= tolerance
         : current - candidate >= tolerance;
+}
+
+export function isStopTriggerAdmissible(
+    triggerPrice,
+    markPrice,
+    tickSize,
+    isLong
+) {
+    if (
+        !Number.isFinite(triggerPrice) ||
+        !Number.isFinite(markPrice) ||
+        !Number.isFinite(tickSize) ||
+        triggerPrice <= 0 ||
+        markPrice <= 0 ||
+        tickSize <= 0
+    ) {
+        return false;
+    }
+
+    // STOP_MARKET closes a LONG with SELL below Mark Price and closes a SHORT
+    // with BUY above Mark Price. Keep one full tick of separation so a target
+    // that has already been crossed is rejected locally instead of sent to
+    // Binance as an immediately-triggering order.
+    return isLong
+        ? triggerPrice <= markPrice - tickSize
+        : triggerPrice >= markPrice + tickSize;
 }
 
 export function isSameTriggerPrice(order, expectedPrice, tickSize) {

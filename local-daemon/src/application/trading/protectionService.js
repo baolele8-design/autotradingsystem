@@ -1,17 +1,18 @@
 import {
   PROTECTION_STAGE_RANK,
-  calculateTrailingDecision
+  calculateTrailingDecision,
+  resolveOptimizedTrailingPolicy
 } from '../../../../src/domain/trading/trailingPolicy.js';
 import {
   findPositionForTrade,
-  getBinanceOrderType,
   isOwnedAlgoOrder,
   isSameTriggerPrice,
+  isStopTriggerAdmissible,
   isStopLossOrder,
   isStrictlyBetterStop,
   isTakeProfitOrder,
   makeClientAlgoId,
-  makeInitialClientAlgoId,
+  makeExitClientOrderId,
   makePositionReductionPayload,
   quantizeStopPrice,
   replaceStopSafely,
@@ -28,7 +29,9 @@ const INTERVAL_MS = {
 
 export function createProtectionService(context) {
   const {
+    getCurrentAiModel = () => null,
     markPriceCache,
+    observeOpenTrades = () => {},
     readBinanceReq,
     safeFetch,
     sendBinanceReq,
@@ -37,8 +40,9 @@ export function createProtectionService(context) {
 
   const exchangePriceFilters = new Map();
   const symbolOrderLocks = new Set();
+  const crossedTargetLoggedAt = new Map();
   let exchangePriceFiltersLoadedAt = 0;
-  
+
   async function withSymbolOrderLock(symbol, operation) {
       if (symbolOrderLocks.has(symbol)) {
           return { skipped: true };
@@ -58,7 +62,8 @@ export function createProtectionService(context) {
       if (!force && cacheIsFresh && exchangePriceFilters.size > 0) return true;
   
       const exchangeInfo = await safeFetch(
-          'https://fapi.binance.com/fapi/v1/exchangeInfo'
+          'https://fapi.binance.com/fapi/v1/exchangeInfo',
+          { priority: 'protection' }
       );
       if (!exchangeInfo || !Array.isArray(exchangeInfo.symbols)) return false;
   
@@ -86,14 +91,14 @@ export function createProtectionService(context) {
   }
   
   async function readSymbolOpenOrders(symbol) {
-      const [standardOrders, algoOrders] = await Promise.all([
-          readBinanceReq('/fapi/v1/openOrders', { symbol }),
-          readBinanceReq('/fapi/v1/openAlgoOrders', { symbol })
+      const [standardOrdersRes, algoOrdersRes] = await Promise.all([
+          readBinanceReq('/fapi/v1/openOrders', { symbol }, { priority: 'protection' }),
+          readBinanceReq('/fapi/v1/openAlgoOrders', { symbol }, { priority: 'protection' })
       ]);
   
-      if (!Array.isArray(standardOrders) || !Array.isArray(algoOrders)) {
-          return null;
-      }
+      const standardOrders = Array.isArray(standardOrdersRes) ? standardOrdersRes : (standardOrdersRes?.orders || []);
+      const algoOrders = Array.isArray(algoOrdersRes) ? algoOrdersRes : (algoOrdersRes?.orders || []);
+
       return [...standardOrders, ...algoOrders];
   }
   
@@ -109,7 +114,7 @@ export function createProtectionService(context) {
               const queried = await readBinanceReq('/fapi/v1/algoOrder', {
                   symbol,
                   algoId
-              });
+              }, { priority: 'protection' });
               if (
                   queried &&
                   String(queried.algoStatus || '').toUpperCase() === 'NEW'
@@ -120,7 +125,7 @@ export function createProtectionService(context) {
   
           const openOrders = await readBinanceReq('/fapi/v1/openAlgoOrders', {
               symbol
-          });
+          }, { priority: 'protection' });
           if (Array.isArray(openOrders)) {
               const verified = openOrders.find(order =>
                   (algoId !== undefined && String(order.algoId) === String(algoId)) ||
@@ -168,7 +173,11 @@ export function createProtectionService(context) {
           if (openTradesError) {
               throw new Error(`Không đọc được open trades: ${openTradesError.message}`);
           }
-          if (!queriedTrades || queriedTrades.length === 0) return;
+          if (!queriedTrades || queriedTrades.length === 0) {
+              observeOpenTrades([]);
+              return;
+          }
+          observeOpenTrades(queriedTrades);
   
           const filtersReady = await loadExchangePriceFilters();
           if (!filtersReady) {
@@ -176,7 +185,11 @@ export function createProtectionService(context) {
               return;
           }
   
-          const positionsRes = await readBinanceReq('/fapi/v2/positionRisk');
+          const positionsRes = await readBinanceReq(
+              '/fapi/v2/positionRisk',
+              {},
+              { priority: 'protection' }
+          );
           if (!Array.isArray(positionsRes)) return;
   
           const openTrades = [...queriedTrades].sort(
@@ -250,7 +263,10 @@ export function createProtectionService(context) {
   
               const intervalMs = INTERVAL_MS[trade.interval] || 3600000;
               const candlesPassed = (Date.now() - openTimeMs) / intervalMs;
-              const rawMaxCycles = Number.parseInt(trade.holding_cycles) || 5;
+              const rawMaxCycles =
+                Number.parseInt(trade.planned_holding_cycles) ||
+                Number.parseInt(trade.holding_cycles) ||
+                5;
   
               // Soft extension: profitable trades at TRAIL or LOCK stage
               // get 25% more holding time to let winners run.
@@ -271,7 +287,11 @@ export function createProtectionService(context) {
                   const closeSide = isLong ? 'SELL' : 'BUY';
                   const closeQty = Math.abs(Number.parseFloat(position.positionAmt));
   
+                  let closeAccepted = false;
                   try {
+                      await persistTrailingState(trade.id, {
+                          exit_reason: 'TEMPORAL_BARRIER_PENDING'
+                      });
                       const closeResult = await withSymbolOrderLock(trade.symbol, async () => {
                           await sendBinanceReq(
                               'POST',
@@ -280,9 +300,14 @@ export function createProtectionService(context) {
                                   symbol: trade.symbol,
                                   side: closeSide,
                                   type: 'MARKET',
-                                  quantity: closeQty
+                                  quantity: closeQty,
+                                  newClientOrderId: makeExitClientOrderId(
+                                      'temporal',
+                                      trade.id
+                                  )
                               })
                           );
+                          closeAccepted = true;
   
                           try {
                               const remainingOrders =
@@ -322,6 +347,18 @@ export function createProtectionService(context) {
                       });
                       continue;
                   } catch (error) {
+                      if (!closeAccepted) {
+                          try {
+                              await persistTrailingState(trade.id, {
+                                  exit_reason: null
+                              });
+                          } catch (rollbackError) {
+                              console.error(
+                                  `[TIME BARRIER INTENT] ${trade.symbol}:`,
+                                  rollbackError.message
+                              );
+                          }
+                      }
                       console.error(
                           `❌ [TIME BARRIER] Lỗi khi ép đóng ${trade.symbol}:`,
                           error.response?.data?.msg || error.message
@@ -331,6 +368,13 @@ export function createProtectionService(context) {
   
               let decision;
               try {
+                  const policyOverride = resolveOptimizedTrailingPolicy(
+                      getCurrentAiModel(),
+                      trade.strategy_name,
+                      trade.asset_tier,
+                      trade.regime_at_entry,
+                      trade.btc_regime_at_entry
+                  );
                   decision = calculateTrailingDecision({
                       entryPrice,
                       currentSl,
@@ -340,7 +384,8 @@ export function createProtectionService(context) {
                       storedHighWater: observedHighWater,
                       protectionStage: trade.protection_stage,
                       strategyName: trade.strategy_name,
-                      assetTier: trade.asset_tier
+                      assetTier: trade.asset_tier,
+                      policyOverride
                   });
               } catch (error) {
                   console.error(`[TRAILING] Input không hợp lệ ${trade.symbol}:`, error.message);
@@ -395,6 +440,33 @@ export function createProtectionService(context) {
               );
   
               if (!shouldMoveStop) {
+                  if (highWaterChanged) {
+                      try {
+                          await persistTrailingState(trade.id, {
+                              high_water_price: decision.highWaterPrice,
+                              high_water_r: decision.highWaterR
+                          });
+                      } catch (error) {
+                          console.error(`[TRAILING DB] ${trade.symbol}:`, error.message);
+                      }
+                  }
+                  continue;
+              }
+
+              if (!isStopTriggerAdmissible(
+                  quantized.numericPrice,
+                  markPrice,
+                  quantized.tickSize,
+                  isLong
+              )) {
+                  const lastLoggedAt = crossedTargetLoggedAt.get(trade.symbol) || 0;
+                  if (Date.now() - lastLoggedAt >= 60_000) {
+                      crossedTargetLoggedAt.set(trade.symbol, Date.now());
+                      console.warn(
+                          `[TRAILING SKIP] ${trade.symbol}: target ${quantized.formattedPrice} ` +
+                          `đã bị Mark Price ${markPrice} vượt qua; giữ nguyên SL ${currentSl}.`
+                      );
+                  }
                   if (highWaterChanged) {
                       try {
                           await persistTrailingState(trade.id, {
