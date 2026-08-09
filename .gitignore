@@ -8,3 +8,8 @@ vite.log
 
 .env.local
 
+.agents/
+archive_tmp/
+.env.local.vps-backup
+*.bak-*
+
