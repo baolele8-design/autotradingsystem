@@ -200,3 +200,15 @@ npm run build
 npm run check
 npm --prefix local-daemon start
 ```
+
+## 9. Deployment (2026-08-09)
+
+- **Automatic**: pushing `main` to GitHub triggers `.github/workflows/deploy.yml`,
+  which runs `scripts/deploy.sh` on the VPS (`root@222.255.181.141:/root/quant-bot`):
+  reset tracked build artifacts (`git checkout -- .`) → fetch → ff-only merge →
+  `npm ci` → `npm test` (hard gate) → `check:architecture` warn-only (TD-005 known)
+  → `npm run build` → `local-daemon npm ci` → `pm2 restart main-bot frontend`.
+- **Manual**: `ssh root@222.255.181.141` then `cd /root/quant-bot && bash scripts/deploy.sh`
+  (`--dry-run` to preview). Deploy log: `logs/deploy.log`; previous HEAD in `.deploy-prev-head`.
+- The CI SSH key lives in the GitHub secret `VPS_SSH_DEPLOY_KEY` (no passphrase).
+  Rotating it requires updating the secret plus `~/.ssh/authorized_keys` on the VPS.
