@@ -13,3 +13,5 @@ archive_tmp/
 .env.local.vps-backup
 *.bak-*
 
+logs/deploy.log
+
