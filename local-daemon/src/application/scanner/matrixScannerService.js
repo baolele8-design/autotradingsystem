@@ -25,6 +25,10 @@ import {
   makeExitClientOrderId
 } from '../../domain/orders/trailingOrders.js';
 
+export function buildMarketDepthUrl(symbol) {
+  return `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=500`;
+}
+
 export function createMatrixScannerService(context) {
   const {
     btcReturnsCache,
@@ -262,7 +266,7 @@ export function createMatrixScannerService(context) {
                   } catch (err) { return; }
 
                   const depthData = await safeFetch(
-                    `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=200`
+                    buildMarketDepthUrl(symbol)
                   );
   
                   for (const interval of targetIntervals) {
