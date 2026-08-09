@@ -15,6 +15,9 @@ log() { echo "[deploy $(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 cd "$APP_DIR"
 log "START dry_run=$DRY_RUN"
 
+# Reset tracked files touched by previous builds (e.g. dist/) so merge never conflicts
+git checkout -- . 2>/dev/null || true
+
 git fetch origin main
 LOCAL_HEAD=$(git rev-parse HEAD)
 REMOTE_HEAD=$(git rev-parse origin/main)
