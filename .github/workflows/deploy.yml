@@ -1,0 +1,24 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run deploy script on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 222.255.181.141
+          username: root
+          key: ${{ secrets.VPS_SSH_DEPLOY_KEY }}
+          port: 22
+          script: |
+            bash /root/quant-bot/scripts/deploy.sh
