@@ -222,11 +222,29 @@ export const TradeValidator = {
     // =========================================================================
     // HỆ THỐNG HARD GATES MỚI (BỨC TƯỜNG KỶ LUẬT THÉP)
     // =========================================================================
+    // F4 (P6): diagnostic h2_realized — E[R] thực tế từ tradeLogs cùng hướng.
+    // Informational: KHÔNG đổi isApproved (đợi benchmark sạch trước khi block).
+    // E_R = WR×avgWinR − (1−WR)×avgLossR, avgWinR = 0.50, avgLossR = 0.62 (từ dữ liệu).
+    const resolvedSameDirection = (tradeLogs || []).filter(log =>
+      log.direction === direction &&
+      (log.status === 'WIN' || log.status === 'LOSS')
+    );
+    let h2Realized = null;
+    if (resolvedSameDirection.length >= 5) {
+      const realizedWinCount = resolvedSameDirection.filter(
+        log => log.status === 'WIN'
+      ).length;
+      const realizedWinRate =
+        realizedWinCount / resolvedSameDirection.length;
+      h2Realized =
+        realizedWinRate * 0.5 - (1 - realizedWinRate) * 0.62;
+    }
+
     const hardGates = [
       { id: 'h_cd', passed: !recentLossSameDirection, text: `COOLDOWN: Không nhồi lệnh cùng hướng ${direction} sau khi bị SL.` },
       { id: 'h_spot_short', passed: tradeType !== 'SPOT' || direction === 'LONG', text: `SPOT DIRECTION: Không thể mở vị thế SHORT trên Spot.` },
       { id: 'h1', passed: apiMacro.realSpreadPct < 0.3 && slTech > 0 && Math.abs(entry - slTech) > (autoData.atr14 * 0.4), text: `CHỐNG NHIỄU: Khoảng cách SL > 0.4 ATR` },
-      { id: 'h2', passed: parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR, text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
+      { id: 'h2', passed: parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR, h2_realized: h2Realized, text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
       { id: 'h4', passed: tradeType === 'SPOT' || (mathCore.liqEstimate && !mathCore.leverageExceedsExchangeCap && mathCore.liqSafetyMargin >= 1.3), text: `ĐỆM THANH LÝ: An toàn Margin` },
       { id: 'h6', passed: autoData.lastClosedVolume >= (autoData.avgVolume20 * 0.4), text: `VOL DEADZONE: Thanh khoản ổn định` },
       { id: 'h_msb', passed: !isMsbContradictory, text: `MARKET STRUCTURE: Cấm giao dịch khi cấu trúc MSB đảo chiều ngược hướng lệnh.` },
@@ -242,12 +260,12 @@ export const TradeValidator = {
       { id: 'h_hurst', passed: !(autoData.hurstValue < 0.4 && requiresTrendPersistence), text: `HURST EXPONENT: Thị trường Mean-Reverting, không phù hợp family momentum.` }
     ];
 
+    // F5 (P7): soft gates chỉ còn telemetry hữu ích — s1 (93% true), s4 (90% true)
+    // không loại được gì; s3 (2% true) chặn nhầm 98% lệnh hợp lệ; s5 NGHỊCH hướng
+    // (pass −0.269R tệ hơn fail −0.079R). Bỏ khỏi DANH SÁCH hiển thị; checkS1..S5 +
+    // checkScores vẫn tính ở evaluateScore vì s1..s5 đóng góp score components.
     const softGates = [
-      { id: 's1', passed: checks.checkS1, weight: 1, text: `CẤU TRÚC L1 ĐỒNG THUẬN`, score: checkScores?.s1 },
       { id: 's2', passed: checks.checkS2, weight: 1, text: `DÒNG TIỀN CMF BƠM THỰC`, score: checkScores?.s2 },
-      { id: 's3', passed: checks.checkS3, weight: 1, text: `SĂN THANH KHOẢN (LIQUIDITY EVENT)`, score: checkScores?.s3 },
-      { id: 's4', passed: checks.checkS4, weight: 1, text: `ĐỘNG LƯỢNG GIÁ (RSI STOCHASTIC)`, score: checkScores?.s4 },
-      { id: 's5', passed: checks.checkS5, weight: 1, text: `ĐỊNH VỊ DÒNG TIỀN (SMART MONEY)`, score: checkScores?.s5 },
       { id: 's6', passed: checks.checkS6, weight: 1, text: `ĐI NGƯỢC ĐÁM ĐÔNG FOMO (CONTRARIAN)`, score: checkScores?.s6 },
       { id: 's7', passed: checks.checkS7, weight: 1, text: `NÉN DẢI BĂNG (SQUEEZE)`, score: checkScores?.s7 },
       { id: 's8', passed: checks.checkS8, weight: 1, text: `VĨ MÔ BẢO CHỨNG (MACRO ALIGNMENT)`, score: checkScores?.s8 },

@@ -353,6 +353,13 @@ function buildFeatures({
   const liquidationHigh =
     liquidationDataReady &&
     isAtLeast(directionalLiqRatio, 0.10);
+  // R1 (2026-08-10): tier-2 soft cho CAPITULATION — stream connected nhưng
+  // coverage/stale fail khiến baseline ratio understate → dùng raw directional
+  // liq vol (USD). LONG: SELL liquidations (liqLongsVol), SHORT: liqShortsVol.
+  const liquidationConnected = autoData.liquidationConnected === true;
+  const directionalLiqVol = isLong
+    ? firstNumber(autoData.liqLongsVol)
+    : firstNumber(autoData.liqShortsVol);
 
   const oiHigh = oiDeltaRank !== null
     ? oiDeltaRank >= 75 && (oiDelta === null || oiDelta > 0)
@@ -420,11 +427,21 @@ function buildFeatures({
     spreadCap = 0.06;
   }
 
+  // R1-audit (2026-08-10): CAPITULATION tier-2 floor theo asset_tier — USD
+  // cố định bias vốn hóa (ZEC max $45 vs BTC $120k). Tier 1/2 = macro/liquid
+  // majors: $10k; Tier 3 = mid-cap: $2k; Tier 4/nano = $500.
+  const capitulationLiqVolFloor = tierText.includes('Tier 1') || tierText.includes('Tier 2')
+    ? 10_000
+    : tierText.includes('Tier 3')
+      ? 2_000
+      : 500;
+
   return Object.freeze({
     direction,
     sign,
     symbol: String(symbol || '').toUpperCase(),
     isAltcoin: String(symbol || '').toUpperCase() !== 'BTCUSDT',
+    assetTier: tierText,
     l1,
     l2,
     isRange: l1.includes('Range') || l1.includes('Chop'),
@@ -475,6 +492,9 @@ function buildFeatures({
     msbContradictory,
     sfpAligned,
     liquidationHigh,
+    liquidationConnected,
+    directionalLiqVol,
+    capitulationLiqVolFloor,
     oiDelta,
     oiHigh,
     oiVeryLow,
@@ -578,7 +598,18 @@ const RULES = Object.freeze([
   {
     strategyId: 'CAPITULATION_RECLAIM',
     regime: f => f.oiVeryLow && isAtLeast(f.atrRank, 85),
-    trigger: f => f.liquidationHigh && (f.sfpAligned || f.msbAligned),
+    // R1 (2026-08-10): two-tier. Tier-1 hard gate giữ nguyên (fail-closed khi
+    // disconnected). Tier-2 soft: stream connected nhưng coverage/stale fail
+    // khiến ratio understate → raw directional liq vol >= floor.
+    trigger: f => {
+      const alignment = f.sfpAligned || f.msbAligned;
+      if (f.liquidationHigh && alignment) return true;
+      return (
+        f.liquidationConnected &&
+        isAtLeast(f.directionalLiqVol, f.capitulationLiqVolFloor) &&
+        alignment
+      );
+    },
     confirmations: [
       confirmation('rsi_extreme', f => f.rsiReversalExtreme),
       confirmation('order_book_absorption', f => isAtLeast(f.obiD, 0.16)),
@@ -590,7 +621,15 @@ const RULES = Object.freeze([
   {
     strategyId: 'PASSIVE_ABSORPTION_REVERSAL',
     regime: f => f.vwapOutsideValue && !f.liquidationHigh,
-    trigger: f => f.sfpAligned && isAtMost(f.cvdD, -5),
+    // R1 (2026-08-10): per-direction từ percentile thật — LONG cvdD<=-3.0
+    // (cực âm top-1%); SHORT GIỮ -5 (fallback LONG-only, KHÔNG lật dấu —
+    // semantic change cần owner confirm; SHORT thực tế vẫn 0 fire).
+    trigger: f => (
+      f.sfpAligned &&
+      (f.direction === 'LONG'
+        ? isAtMost(f.cvdD, -3.0)
+        : isAtMost(f.cvdD, -5))
+    ),
     confirmations: [
       confirmation('cmf_absorption', f => isAtLeast(f.cmfD, 0.05)),
       confirmation('order_book_absorption', f => isAtLeast(f.obiD, 0.20)),
@@ -631,7 +670,10 @@ const RULES = Object.freeze([
   },
   {
     strategyId: 'LIQUIDITY_VACUUM_DRIVE',
-    regime: f => f.amihudHigh && f.isExpansion,
+    // R1 (2026-08-10): AND→OR — giao amihud∩Expansion = 0 row trong sample
+    // (spec §1.2). amihudHigh giữ làm nhánh hiếm, isExpansion làm nhánh chính;
+    // selectivity được giữ bởi trigger chặt + 2/5 confs.
+    regime: f => f.amihudHigh || f.isExpansion,
     trigger: f => (
       f.msbAligned &&
       isAtLeast(f.volumeRatio, 1.8) &&
@@ -657,8 +699,13 @@ const RULES = Object.freeze([
           : f.rsi > 60
       )
     ),
+    // R1-audit (2026-08-10): per-direction từ percentile thật — LONG cvdD>=2.0
+    // (trung dung: 1.5 = p27.5 quá lỏng khi mirror regime, 2.5 ≈ max 2.61 làm
+    // LONG chết lại; 2.0 = ~p90 flow-active), SHORT cvdD>=4.0 (~p90–p95).
     trigger: f => (
-      isAtLeast(f.cvdD, 10) &&
+      (f.direction === 'LONG'
+        ? isAtLeast(f.cvdD, 2.0)
+        : isAtLeast(f.cvdD, 4.0)) &&
       (f.msbAligned || f.priceReclaimedEma)
     ),
     confirmations: [
@@ -915,8 +962,11 @@ export function evaluateStrategyCandidates(input) {
   );
 }
 
-export function routeStrategy(input) {
-  const candidates = evaluateStrategyCandidates(input);
+export function routeStrategy(input, options = {}) {
+  // R2 (2026-08-10): cho phép truyền candidates đã tính sẵn (scanner cần
+  // diagnostics của CẢ candidates để log near-miss, không chỉ strategy thắng).
+  // Backward-compatible: không truyền → tính như cũ.
+  const candidates = options.candidates || evaluateStrategyCandidates(input);
   const selected = candidates.find(
     candidate => candidate.diagnostics.matched
   );
@@ -952,5 +1002,19 @@ export function routeAdaptiveStrategy(input) {
     })
   });
 }
+
+const readEnvNumber = (name, fallback) => {
+  try {
+    const raw = Number(process?.env?.[name]);
+    return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+// R1 (2026-08-10): CAPITULATION tier-2 soft floor — raw directional liquidation
+// notional USD. Spec: floor $10k (~p90 của event rows); env-override.
+const CAPITULATION_LIQ_VOL_FLOOR_USD =
+  readEnvNumber('CAPITULATION_LIQ_VOL_FLOOR_USD', 10000);
 
 export { ROLLOUT_MODE };

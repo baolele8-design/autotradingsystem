@@ -155,18 +155,10 @@ export function deriveMathCore({
   );
 
   const capitalSafe = liveCapital > 0 ? liveCapital : 0;
-  const passingScore = systemScore.passingScore || 50;
-  const scoreRange = 100 - passingScore;
-  const riskMultiplier = Math.max(
-    0.5,
-    Math.min(
-      2.0,
-      0.5 +
-        ((systemScore.score - passingScore) / scoreRange) * 1.5
-    )
-  );
-  const appliedRiskPercent =
-    tradeSetup.riskPercent * riskMultiplier;
+  // F1 (P1): bỏ riskMultiplier — dữ liệu bác bỏ (Spearman −0.036, p=0.599;
+  // bucket 70–79 EV −0.212R tệ nhất lại nhận size cao). Score vẫn là gate
+  // thuần (systemScore.passingScore dùng ở evaluateGates), không còn phóng đại size.
+  const appliedRiskPercent = tradeSetup.riskPercent;
 
   let riskAmountUSD =
     capitalSafe * (appliedRiskPercent / 100);

@@ -1,3 +1,9 @@
+import {
+  findStaleStrategies as findStaleStrategiesDefault,
+  logStaleSummary as logStaleSummaryDefault,
+  SCANNER_CYCLE_MS
+} from '../strategyHealth/strategyWatchdog.js';
+
 export function createDaemonScheduler(context) {
   const {
     getConnectedClients,
@@ -12,10 +18,56 @@ export function createDaemonScheduler(context) {
     startMarketStreams,
     syncBinanceTime,
     syncHUD,
-    syncMvrv
+    syncMvrv,
+    // R3 watchdog context (all optional; defaults keep the scheduler
+    // self-contained and testable):
+    getKnownStrategyIds = () => [],
+    strategyWatchdog = {},
+    strategyHealthLog = (...args) => console.log(...args),
+    strategyStaleAfterCycles
   } = context;
   const setIntervalFn = context.setIntervalFn || setInterval;
   const setTimeoutFn = context.setTimeoutFn || setTimeout;
+
+  const findStale = strategyWatchdog.findStaleStrategies || findStaleStrategiesDefault;
+  const logStale = strategyWatchdog.logStaleSummary || logStaleSummaryDefault;
+
+  // R3: in-memory last-fired state, owned by this scheduler. The scanner and
+  // other runtimes must NOT import this module — they (or bootstrap glue)
+  // report fires through `updateLastFired`, exposed on the returned object.
+  // GAP: boot-seed from Supabase trade_logs (spec §3.2) requires supabase
+  // context at bootstrap and is intentionally left as a follow-up wiring step.
+  const strategyFireState = new Map();
+
+  function updateLastFired(strategyId) {
+    if (strategyId == null) return;
+    strategyFireState.set(String(strategyId), Date.now());
+  }
+
+  function getStrategyFireState() {
+    return strategyFireState;
+  }
+
+  async function runStrategyHealthCheck() {
+    const now = Date.now();
+    const strategies = getKnownStrategyIds().map(strategyId => ({
+      strategyId,
+      lastFiredAt: strategyFireState.get(String(strategyId)) ?? null
+    }));
+    const stale = findStale({
+      strategies,
+      now,
+      staleAfterCycles: strategyStaleAfterCycles
+    });
+    if (stale.length === 0) {
+      strategyHealthLog('[STRATEGY HEALTH] all alive');
+    } else {
+      strategyHealthLog(
+        `[STRATEGY HEALTH] stale: ${stale.map(s => `${s.strategyId} (${s.status})`).join(', ')}`
+      );
+    }
+    return { stale, summary: logStale(stale) };
+  }
 
   async function paperTradingLoop() {
       await runLazyPaperTrading();
@@ -59,6 +111,10 @@ export function createDaemonScheduler(context) {
       setIntervalFn(syncMvrv, 12 * 60 * 60 * 1000);
   
       setTimeoutFn(matrixScannerLoop, 5000);
+      // R3 watchdog: first health check one scanner cycle after the first
+      // scan, then every 5 minutes (staleAfterCycles=720 cycles ~= 12h at 60s).
+      setTimeoutFn(runStrategyHealthCheck, 5000 + SCANNER_CYCLE_MS);
+      setIntervalFn(runStrategyHealthCheck, 300000);
       setIntervalFn(async () => {
           console.log("🧠 [CRON] Kiểm tra dữ liệu mới và chạy optimizer...");
           await runOptimizationCycle();
@@ -76,5 +132,13 @@ export function createDaemonScheduler(context) {
       }, 10000);
   }
 
-  return { startDaemonServices };
+  return {
+    startDaemonServices,
+    // R3: fire-state reporting + check, for bootstrap glue and tests.
+    // matrixScannerService intentionally stays untouched (no cross-module
+    // import); bootstrap wires updateLastFired at the approved point.
+    updateLastFired,
+    getStrategyFireState,
+    runStrategyHealthCheck
+  };
 }

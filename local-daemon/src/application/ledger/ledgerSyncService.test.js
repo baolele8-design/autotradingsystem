@@ -822,3 +822,177 @@ test('ledgerSyncService resolves zero PnL trade as LOSS when exitReason is STOP_
   assert.ok(resolved.pnl_usd < 0);
   assert.ok(Math.abs(resolved.pnl_usd - (-3.5294)) < 1e-3);
 });
+
+function makeKline(index, takerBuyBase) {
+  const baseTime = Date.now() - (80 - index) * 15 * 60 * 1000;
+  return [
+    baseTime,
+    '3000',
+    '3002',
+    '2998',
+    '3000',
+    '100',
+    baseTime + 14 * 60 * 1000,
+    '300000',
+    10,
+    String(takerBuyBase),
+    String(takerBuyBase * 3),
+    '0'
+  ];
+}
+
+test('ledgerSyncService - real VPIN from klines (high taker-buy) invalidates the PENDING order', async () => {
+  const recentTimestamp = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const initialLogs = [
+    {
+      id: 'trade-vpin-1',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+      status: 'PENDING',
+      type: 'FUTURES',
+      entry: 3000,
+      sl: 2900,
+      interval: '15m',
+      strategy_name: 'VOL_COMPRESSION_IGNITION',
+      soft_score: 80,
+      atr_at_entry: 4,
+      created_at: recentTimestamp
+    }
+  ];
+
+  const supabase = createMockSupabase(initialLogs);
+  const binanceDeletes = [];
+
+  const readBinanceReq = async () => [{ symbol: 'BTCUSDT', positionAmt: '0' }];
+  const sendBinanceReq = async (method, endpoint, params) => {
+    binanceDeletes.push({ method, endpoint, params });
+  };
+
+  // 60 klines, taker-buy = 90% of base volume => real VPIN ~ 0.8 (> 0.10 gate)
+  const takerBuyKlines = Array.from({ length: 60 }, (_, i) => makeKline(i, 90));
+  const marketDataCache = {
+    getKlines: async () => takerBuyKlines
+  };
+
+  const service = createLedgerSyncService({
+    markPriceCache: new Map(),
+    marketDataCache,
+    readBinanceReq,
+    sendBinanceReq,
+    supabase
+  });
+
+  await service.runLedgerStateSync();
+
+  assert.ok(binanceDeletes.length >= 1);
+  assert.equal(binanceDeletes[0].method, 'DELETE');
+  assert.equal(binanceDeletes[0].params.symbol, 'BTCUSDT');
+  assert.equal(supabase.updateCalls.length, 1);
+  assert.equal(supabase.updateCalls[0].id, 'trade-vpin-1');
+  assert.equal(supabase.updateCalls[0].payload.status, 'CANCELLED_INVALIDATED');
+  assert.ok(supabase.updateCalls[0].payload.exit_reason.includes('HARD_GATE_FAILED_H_VPIN'));
+  assert.ok(supabase.updateCalls[0].payload.close_time);
+});
+
+test('ledgerSyncService - VPIN returns 0 with fewer than 50 klines (no crash, order stays PENDING)', async () => {
+  const recentTimestamp = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const initialLogs = [
+    {
+      id: 'trade-vpin-short-1',
+      symbol: 'ETHUSDT',
+      direction: 'LONG',
+      status: 'PENDING',
+      type: 'FUTURES',
+      entry: 3000,
+      sl: 2900,
+      interval: '15m',
+      strategy_name: 'VOL_COMPRESSION_IGNITION',
+      soft_score: 80,
+      atr_at_entry: 4,
+      created_at: recentTimestamp
+    }
+  ];
+
+  const supabase = createMockSupabase(initialLogs);
+  const binanceDeletes = [];
+
+  const readBinanceReq = async () => [{ symbol: 'ETHUSDT', positionAmt: '0' }];
+  const sendBinanceReq = async (method, endpoint, params) => {
+    binanceDeletes.push({ method, endpoint, params });
+  };
+
+  // 25 klines (< 50 lookback) with extreme taker-buy imbalance:
+  // real VPIN must be 0 (fail-open), never NaN/crash.
+  const shortKlines = Array.from({ length: 25 }, (_, i) => makeKline(i, 90));
+  const marketDataCache = {
+    getKlines: async () => shortKlines
+  };
+
+  const service = createLedgerSyncService({
+    markPriceCache: new Map(),
+    marketDataCache,
+    readBinanceReq,
+    sendBinanceReq,
+    supabase
+  });
+
+  await service.runLedgerStateSync();
+
+  assert.equal(binanceDeletes.length, 0);
+  assert.equal(supabase.updateCalls.length, 0);
+  assert.equal(supabase.logs[0].status, 'PENDING');
+});
+
+test('ledgerSyncService - snapshot without l1/vpinValue/softScore does not crash the gate policy', async () => {
+  const recentTimestamp = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const initialLogs = [
+    {
+      id: 'trade-no-l1-1',
+      symbol: 'SOLUSDT',
+      direction: 'LONG',
+      status: 'PENDING',
+      type: 'FUTURES',
+      entry: 3000,
+      sl: 2900,
+      interval: '15m',
+      strategy_name: 'VOL_COMPRESSION_IGNITION',
+      soft_score: 80,
+      atr_at_entry: 2,
+      created_at: recentTimestamp
+    }
+  ];
+
+  const supabase = createMockSupabase(initialLogs);
+  const binanceDeletes = [];
+
+  const readBinanceReq = async () => [{ symbol: 'SOLUSDT', positionAmt: '0' }];
+  const sendBinanceReq = async (method, endpoint, params) => {
+    binanceDeletes.push({ method, endpoint, params });
+  };
+
+  // Snapshot deliberately omits l1, vpinValue and softScore.
+  const marketDataCache = {
+    getSnapshot: async () => ({
+      autoData: {
+        msbState: 'Bullish_MSB',
+        ema20: 3000,
+        atr14: 2
+      },
+      apiMacro: { realSpreadPct: 0.05 }
+    })
+  };
+
+  const service = createLedgerSyncService({
+    markPriceCache: new Map(),
+    marketDataCache,
+    readBinanceReq,
+    sendBinanceReq,
+    supabase
+  });
+
+  await service.runLedgerStateSync();
+
+  assert.equal(binanceDeletes.length, 0);
+  assert.equal(supabase.updateCalls.length, 0);
+  assert.equal(supabase.logs[0].status, 'PENDING');
+});

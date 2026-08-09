@@ -4,6 +4,10 @@ import crypto from 'crypto';
 import { daemonEnvironment } from '../config/environment.js';
 import { calculateMainBotAllocation } from '../domain/execution/capitalAllocation.js';
 import { selectExecutableSetups } from '../domain/execution/setupSelection.js';
+import {
+    isBatchCooldownActive,
+    capTargetsByOpenPositions
+} from '../domain/execution/entryRatePolicy.js';
 import { makeInitialClientAlgoId } from '../domain/orders/trailingOrders.js';
 import { createDaemonSupabaseClient } from '../infrastructure/supabase/supabaseClient.js';
 import { createBinanceGateway } from '../infrastructure/binance/binanceGateway.js';
@@ -27,7 +31,9 @@ const CONFIG = {
     fixedSizeUsd: 55,           // Notional/lệnh tại mốc vốn gốc
     maxRiskPct: 1.0,            // Rủi ro Cắt máu tuyệt đối: KHÔNG VƯỢT QUÁ 1% VỐN
     minScore: 50,               // Điểm Logic Gate tối thiểu để vào lệnh
-    allowedIntervals: ['15m', '1h', '4h', '1d'] 
+    allowedIntervals: ['15m', '1h', '4h', '1d'],
+    maxOpenPositions: 5,        // Cap concurrency: tối đa vị thế mở cùng lúc
+    minBatchIntervalMs: 60_000  // Cooldown giữa 2 batch vào lệnh liên tiếp
 };
 
 const supabase = createDaemonSupabaseClient(
@@ -52,6 +58,9 @@ const {
 
 // 🛡️ BẢN VÁ: Bộ nhớ khóa chặn bắn đúp (Lưu thời điểm bắn lệnh cuối cùng)
 const actionCooldowns = new Map();
+
+// ⏱️ BATCH COOLDOWN: mốc thời gian batch vào lệnh gần nhất (0 = chưa từng bắn)
+let lastEntryBatchAt = 0;
 
 // 1. Đồng bộ Đồng hồ & Kéo Thông số sàn
 const syncBinanceTime = async () => {
@@ -98,6 +107,15 @@ const formatPrecision = (val, step) => {
 // =========================================================================
 const processSignals = async (topSetups) => {
     if (isProcessing || !exchangeInfoCache) return;
+
+    // ⏱️ BATCH COOLDOWN: bỏ qua cả cycle nếu batch gần nhất mới bắn < 60s trước
+    if (isBatchCooldownActive(lastEntryBatchAt, Date.now(), CONFIG.minBatchIntervalMs)) {
+        console.log(
+            `[BATCH COOLDOWN] Bỏ qua cycle: batch gần nhất cách ${((Date.now() - lastEntryBatchAt) / 1000).toFixed(1)}s (< ${CONFIG.minBatchIntervalMs / 1000}s).`
+        );
+        return;
+    }
+
     isProcessing = true;
 
     try {
@@ -193,7 +211,13 @@ const processSignals = async (topSetups) => {
             return;
         }
 
-        const targets = validSetups.slice(0, slotsAvailable);
+        // CAP CONCURRENCY: không mở quá maxOpenPositions vị thế cùng lúc,
+        // dù ngân sách có đủ cho nhiều slot hơn.
+        const targets = capTargetsByOpenPositions(
+            validSetups,
+            slotsAvailable,
+            CONFIG.maxOpenPositions
+        );
 
         if (targets.length > 0) {
             // Nếu số dư khả dụng thấp hơn size động hiện tại, dừng bắn lệnh luôn
@@ -214,6 +238,8 @@ const processSignals = async (topSetups) => {
                 await executeTrade(setup, liveCapital, allocation.fixedSizeUsd);
                 await new Promise(r => setTimeout(r, 800)); // Nhịp thở cho API
             }
+            // ⏱️ Ghi mốc batch vào lệnh thành công để chặn cycle tiếp theo < 60s
+            lastEntryBatchAt = Date.now();
             console.log(`======================================================\n`);
         }
 

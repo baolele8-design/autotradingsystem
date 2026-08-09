@@ -21,7 +21,9 @@ export function selectExecutableSetups(
     cooldownMs = 300_000,
     minScore = 50,
     now = Date.now(),
-    occupiedSymbols = []
+    occupiedSymbols = [],
+    maxOpenPositions = 5,
+    maxOpenPerStrategy = 2
   } = {}
 ) {
   const filterStats = {
@@ -33,7 +35,8 @@ export function selectExecutableSetups(
     lowScore: 0,
     notFutures: 0,
     paperOnly: 0,
-    passed: 0
+    passed: 0,
+    positionCap: 0
   };
   const validSetups = [];
   const alreadyOccupied = new Set(occupiedSymbols);
@@ -90,5 +93,24 @@ export function selectExecutableSetups(
     filterStats.passed += 1;
   }
 
-  return { filterStats, validSetups };
+  // CẮT CONCURRENCY: validSetups đã xếp hạng theo score giảm dần (rankedSetups
+  // sort trước vòng lọc). Giới hạn số vị thế mở tối đa tổng và tối đa mỗi strategy.
+  const cappedSetups = [];
+  const strategyCounts = new Map();
+  for (const setup of validSetups) {
+    if (cappedSetups.length >= maxOpenPositions) {
+      filterStats.positionCap += 1;
+      continue;
+    }
+    const strategyKey = String(setup.strategyId || 'DEFAULT');
+    const strategyCount = strategyCounts.get(strategyKey) || 0;
+    if (strategyCount >= maxOpenPerStrategy) {
+      filterStats.positionCap += 1;
+      continue;
+    }
+    strategyCounts.set(strategyKey, strategyCount + 1);
+    cappedSetups.push(setup);
+  }
+
+  return { filterStats, validSetups: cappedSetups };
 }

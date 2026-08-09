@@ -1,3 +1,72 @@
+
+test('R1-audit CVD: LONG cvdD=1.5 KHONG match (threshold 2.0)', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      currentPrice: 95,
+      ema20: { value: 96, slope: 0.1 },
+      htfSma200: 100,
+      rsi: 35,
+      cvdTrend: 1.5,
+      cmf: 0.02,
+      obi: 0.60,
+      oiDelta: -0.2,
+      msbState: 'Bullish_MSB'
+    },
+    vectorDetails: { l1: 'Trend Down', sTrend: -35 }
+  })).find(item => item.strategyId === 'CVD_STRUCTURE_DIVERGENCE');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1-audit CAPITULATION tier-2: Tier 3 duoi  KHONG match', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    assetTier: 'Tier 3: Mid-Cap Equities',
+    autoData: {
+      atrRank: 90,
+      oiDelta: -3,
+      oiDeltaRank: 5,
+      liqLongRatio: 0,
+      liquidationCoverageReady: false,
+      liquidationStale: true,
+      liquidationConnected: true,
+      liqLongsVol: 1500,
+      isBullishSFP: true,
+      rsi: 30,
+      obi: 0.66,
+      cmf: 0.10
+    }
+  })).find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1-audit CAPITULATION tier-2: Tier 3 .5k match', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    assetTier: 'Tier 3: Mid-Cap Equities',
+    autoData: {
+      atrRank: 90,
+      oiDelta: -3,
+      oiDeltaRank: 5,
+      liqLongRatio: 0,
+      liquidationCoverageReady: false,
+      liquidationStale: true,
+      liquidationConnected: true,
+      liqLongsVol: 2500,
+      isBullishSFP: true,
+      rsi: 30,
+      obi: 0.66,
+      cmf: 0.10
+    }
+  })).find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -480,4 +549,289 @@ test('is deterministic, does not mutate inputs, and rejects ambiguous directions
     () => routeStrategy({ ...input, direction: 'BUY' }),
     /LONG or SHORT/
   );
+});
+
+// ============================================================
+// R1 (2026-08-10): ngưỡng mới per-direction từ percentile THẬT
+// (spec 10_reachability_fix_spec.md §1). CVD: LONG >=1.5 / SHORT >=4.0;
+// PASSIVE: LONG <=-3.0 / SHORT giữ -5 (fallback LONG-only, không lật dấu);
+// LIQUIDITY_VACUUM regime: amihudHigh || isExpansion; CAPITULATION: tier-2
+// soft khi stream connected + raw directional liq vol >= floor.
+// ============================================================
+
+test('R1 CVD: LONG cvdD=2 match (threshold 2.0) — ngưỡng cũ 10 là RED', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      currentPrice: 95,
+      ema20: { value: 96, slope: 0.1 },
+      htfSma200: 100,
+      rsi: 35,
+      cvdTrend: 2,
+      cmf: 0.02,
+      obi: 0.60,
+      oiDelta: -0.2,
+      msbState: 'Bullish_MSB'
+    },
+    vectorDetails: { l1: 'Trend Down', sTrend: -35 }
+  })).find(item => item.strategyId === 'CVD_STRUCTURE_DIVERGENCE');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 CVD: SHORT cvdD=4 match (threshold 4.0) — ngưỡng cũ 10 là RED', () => {
+  const input = createInput({
+    direction: 'SHORT',
+    autoData: {
+      currentPrice: 105,
+      ema20: { value: 104, slope: -0.1 },
+      htfSma200: 100,
+      rsi: 65,
+      cvdTrend: -4,
+      cmf: -0.02,
+      obi: 0.40,
+      oiDelta: -0.2,
+      msbState: 'Bearish_MSB'
+    },
+    vectorDetails: { l1: 'Trend Up', sTrend: 35 }
+  });
+  const candidate = evaluateStrategyCandidates(input).find(
+    item => item.strategyId === 'CVD_STRUCTURE_DIVERGENCE'
+  );
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 CVD: SHORT cvdD=2 KHÔNG match — per-direction giữ SHORT >=4.0 chặt', () => {
+  const input = createInput({
+    direction: 'SHORT',
+    autoData: {
+      currentPrice: 105,
+      ema20: { value: 104, slope: -0.1 },
+      htfSma200: 100,
+      rsi: 65,
+      cvdTrend: -2,
+      cmf: -0.02,
+      obi: 0.40,
+      oiDelta: -0.2,
+      msbState: 'Bearish_MSB'
+    },
+    vectorDetails: { l1: 'Trend Up', sTrend: 35 }
+  });
+  const candidate = evaluateStrategyCandidates(input).find(
+    item => item.strategyId === 'CVD_STRUCTURE_DIVERGENCE'
+  );
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1 PASSIVE: LONG cvdD=-3 match (threshold -3.0) — ngưỡng cũ -5 là RED', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      currentPrice: 95,
+      isBullishSFP: true,
+      cvdTrend: -3,
+      cmf: 0.10,
+      obi: 0.70,
+      lastClosedVolume: 140
+    }
+  })).find(item => item.strategyId === 'PASSIVE_ABSORPTION_REVERSAL');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 PASSIVE: SHORT giữ ngưỡng cũ -5 (không lật dấu) — cvdD=-6 vẫn match', () => {
+  const input = createInput({
+    direction: 'SHORT',
+    autoData: {
+      currentPrice: 105,
+      vwapUpper: 103,
+      vwapLower: 97,
+      isBearishSFP: true,
+      cvdTrend: 6,
+      cmf: -0.10,
+      obi: 0.30,
+      lastClosedVolume: 140
+    },
+    apiMacro: { lsPositionVolRatio: 0.90 }
+  });
+  const candidate = evaluateStrategyCandidates(input).find(
+    item => item.strategyId === 'PASSIVE_ABSORPTION_REVERSAL'
+  );
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 PASSIVE: SHORT cvdD=-3 KHÔNG match — SHORT không được nới lỏng', () => {
+  const input = createInput({
+    direction: 'SHORT',
+    autoData: {
+      currentPrice: 105,
+      vwapUpper: 103,
+      vwapLower: 97,
+      isBearishSFP: true,
+      cvdTrend: 3,
+      cmf: -0.10,
+      obi: 0.30,
+      lastClosedVolume: 140
+    },
+    apiMacro: { lsPositionVolRatio: 0.90 }
+  });
+  const candidate = evaluateStrategyCandidates(input).find(
+    item => item.strategyId === 'PASSIVE_ABSORPTION_REVERSAL'
+  );
+
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1 LIQUIDITY_VACUUM: amihudHigh=false + isExpansion=true match (AND→OR) — AND cũ là RED', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      currentPrice: 101,
+      ema20: { value: 100, slope: 0.2 },
+      amihudRank: 50,
+      bbwRank: 75,
+      bbwSlope: 8,
+      lastClosedVolume: 200,
+      msbState: 'Bullish_MSB',
+      cvdTrend: 6
+    },
+    vectorDetails: { l2: 'Expansion' }
+  })).find(item => item.strategyId === 'LIQUIDITY_VACUUM_DRIVE');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 CAPITULATION tier-2: stream connected + liqLongsVol>=floor match khi hard gate fail', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      atrRank: 90,
+      oiDelta: -3,
+      oiDeltaRank: 5,
+      liqLongRatio: 0,
+      liquidationCoverageReady: false,
+      liquidationStale: true,
+      liquidationConnected: true,
+      liqLongsVol: 15000,
+      isBullishSFP: true,
+      rsi: 30,
+      obi: 0.66,
+      cmf: 0.10
+    }
+  })).find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.regimePassed, true);
+  assert.equal(candidate.diagnostics.triggerPassed, true);
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+test('R1 CAPITULATION tier-2: liqLongsVol dưới floor (5000) → KHÔNG match', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      atrRank: 90,
+      oiDelta: -3,
+      oiDeltaRank: 5,
+      liqLongRatio: 0,
+      liquidationCoverageReady: false,
+      liquidationStale: true,
+      liquidationConnected: true,
+      liqLongsVol: 5000,
+      isBullishSFP: true,
+      rsi: 30,
+      obi: 0.66,
+      cmf: 0.10
+    }
+  })).find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1 CAPITULATION tier-2: stream disconnected → KHÔNG match (fail-closed giữ nguyên)', () => {
+  const candidate = evaluateStrategyCandidates(createInput({
+    autoData: {
+      atrRank: 90,
+      oiDelta: -3,
+      oiDeltaRank: 5,
+      liqLongRatio: 0,
+      liquidationCoverageReady: false,
+      liquidationStale: true,
+      liquidationConnected: false,
+      liqLongsVol: 15000,
+      isBullishSFP: true,
+      rsi: 30,
+      obi: 0.66,
+      cmf: 0.10
+    }
+  })).find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.triggerPassed, false);
+  assert.equal(candidate.diagnostics.matched, false);
+});
+
+test('R1 CAPITULATION hard gate giữ nguyên: liquidationHigh + sfpAligned vẫn match', () => {
+  const candidate = evaluateStrategyCandidates(paperFixtureById.CAPITULATION_RECLAIM)
+    .find(item => item.strategyId === 'CAPITULATION_RECLAIM');
+
+  assert.equal(candidate.diagnostics.matched, true);
+});
+
+// ============================================================
+// R2 (2026-08-10): routeStrategy nhận candidates đã tính sẵn
+// (spec §2.2 — refactor backward-compatible 1 dòng).
+// ============================================================
+
+test('R2 routeStrategy: dùng candidates truyền vào options khi được cung cấp', () => {
+  const input = createInput({
+    autoData: {},
+    apiMacro: {},
+    vectorDetails: {}
+  });
+  input.autoData = {};
+  input.apiMacro = {};
+  input.vectorDetails = {};
+
+  const fakeCandidates = Object.freeze([Object.freeze({
+    strategyId: 'FAKE_MATCHED',
+    direction: 'LONG',
+    rolloutMode: ROLLOUT_MODE.LIVE,
+    priority: 1,
+    profile: Object.freeze({ slMult: 1, tpMult: 2, holdingCycles: 1, minScore: 0 }),
+    policy: Object.freeze({ allowRange: false, allowHighVpin: false }),
+    diagnostics: Object.freeze({
+      matched: true,
+      regimePassed: true,
+      triggerPassed: true,
+      confirmationPassed: 2,
+      confirmationRequired: 2,
+      confirmations: Object.freeze([])
+    })
+  })]);
+
+  const result = routeStrategy(input, { candidates: fakeCandidates });
+
+  assert.equal(result.strategyId, 'FAKE_MATCHED');
+  assert.equal(result.isFallback, false);
+});
+
+test('R2 routeStrategy: không truyền candidates → hành vi cũ, kết quả tương đương', () => {
+  const input = paperFixtureById.VOL_COMPRESSION_IGNITION;
+  const withCandidates = routeStrategy(input, {
+    candidates: evaluateStrategyCandidates(input)
+  });
+  const without = routeStrategy(input);
+
+  assert.deepEqual(withCandidates, without);
 });

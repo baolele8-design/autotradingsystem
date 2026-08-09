@@ -11,6 +11,7 @@ import {
   isNewEntrySymbolAllowed
 } from '../../../../src/domain/trading/symbolEntryPolicy.js';
 import {
+  evaluateStrategyCandidates,
   getStrategyDefinition,
   resolveStrategyTierModel,
   routeAdaptiveStrategy,
@@ -27,6 +28,199 @@ import {
 
 export function buildMarketDepthUrl(symbol) {
   return `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=500`;
+}
+
+// ============================================================
+// R2 (2026-08-10): per-candidate near-miss diagnostics
+// (spec 10_reachability_fix_spec.md §2). Hàm thuần export để test
+// trực tiếp. accumulateNearMiss nhặt candidate KHÔNG match từ
+// evaluateStrategyCandidates (đã trả diagnostics per candidate) và
+// phân loại theo tầng fail đầu tiên: REGIME → TRIGGER → CONF.
+// ============================================================
+
+const NEAR_MISS_MIN_COUNT = (() => {
+  const raw = Number(process?.env?.NEAR_MISS_MIN_COUNT);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 3;
+})();
+
+export function classifyNearMiss(diagnostics) {
+  const confK = diagnostics.confirmationPassed;
+  const confN = diagnostics.confirmationRequired;
+  if (!diagnostics.regimePassed) {
+    return { reason: 'REGIME', confK, confN };
+  }
+  if (!diagnostics.triggerPassed) {
+    return { reason: 'TRIGGER', confK, confN };
+  }
+  return { reason: 'CONF', confK, confN };
+}
+
+export function accumulateNearMiss(allCandidates, statsMap) {
+  for (const candidate of allCandidates || []) {
+    const diagnostics = candidate?.diagnostics;
+    if (!diagnostics || diagnostics.matched) continue;
+    const { reason, confK, confN } = classifyNearMiss(diagnostics);
+    let entry = statsMap.get(candidate.strategyId);
+    if (!entry) {
+      entry = {
+        count: 0,
+        byReason: { REGIME: 0, TRIGGER: 0, CONF: 0 },
+        confDetail: new Map()
+      };
+      statsMap.set(candidate.strategyId, entry);
+    }
+    entry.count += 1;
+    entry.byReason[reason] += 1;
+    if (reason === 'CONF') {
+      const combo = `${confK}/${confN}`;
+      entry.confDetail.set(combo, (entry.confDetail.get(combo) || 0) + 1);
+    }
+  }
+}
+
+export function formatNearMissLine(
+  statsMap,
+  { minCount = NEAR_MISS_MIN_COUNT, top = 5 } = {}
+) {
+  const entries = [...(statsMap?.entries?.() || [])]
+    .map(([strategyId, entry]) => ({ strategyId, ...entry }))
+    .filter(entry => entry.count >= minCount)
+    .sort((left, right) => right.count - left.count)
+    .slice(0, top);
+  if (entries.length === 0) return null;
+
+  const parts = entries.map(({ strategyId, count, byReason, confDetail }) => {
+    const topConf = [...(confDetail?.entries?.() || [])]
+      .sort((left, right) => right[1] - left[1])[0];
+    const confText = byReason.CONF > 0 && topConf
+      ? `${byReason.CONF}(${topConf[0]})`
+      : String(byReason.CONF);
+    return (
+      `${strategyId} x${count} ` +
+      `(REGIME:${byReason.REGIME} TRIGGER:${byReason.TRIGGER} CONF:${confText})`
+    );
+  });
+  return `[STRATEGY NEAR-MISS] ${parts.join(' | ')}`;
+}
+
+// F3 (P4): bỏ '5m' khỏi các interval tạo setup — 5m là nguồn lỗ cấu trúc
+// (n=42, WR 28.6%, −8.29R). Klines 5m vẫn được fetch (klineIntervals) làm
+// LTF reference cho MTF; chỉ không còn setup interval=5m.
+export const TARGET_INTERVALS = ['15m', '1h', '4h', '1d'];
+
+// F6/F7 (C1/C2): thay mockMathCore fake trong loop PENDING bằng tính THẬT.
+// - C1: liqEstimate/liqSafetyMargin/leverageExceedsExchangeCap từ
+//   QuantMath.estimateLiquidation + brackets hiện tại → gate h4 (TradeValidator)
+//   đánh giá invalidation thật, không còn luôn fail hủy mọi PENDING.
+//   Size ≤ 0 → liqEstimate null → h4 fail (hủy lệnh hỏng = đúng);
+//   brackets thiếu → fail-open + console.warn (lệnh đã pass gate lúc đặt).
+// - C2: trueEVValue ưu tiên pLog.true_ev (lưu lúc đặt lệnh), thiếu → tái tính
+//   đúng công thức entry (prior 0.45) từ winRate/totalClosed. rr: 0 thật giữ 0,
+//   null/''/invalid → 1.5.
+export function computePendingOrderMathCore(pLog, {
+  symbol,
+  currentPrice,
+  leverageBracketsRes,
+  defaultBrackets,
+  winRate,
+  totalClosed
+}) {
+  // ---- C2: chuẩn hóa rr (0 thật giữ 0; null/''/invalid → 1.5) ----
+  const rrIsMissing =
+    pLog.rr === undefined || pLog.rr === null || pLog.rr === '';
+  const pLogRrRaw = rrIsMissing ? 1.5 : parseFloat(pLog.rr);
+  const pLogRr =
+    Number.isFinite(pLogRrRaw) && pLogRrRaw >= 0 ? pLogRrRaw : 1.5;
+
+  // ---- C2: EV thật (ưu tiên giá trị lưu lúc đặt; thiếu → tái tính công thức entry) ----
+  const storedTrueEvRaw =
+    pLog.true_ev === undefined || pLog.true_ev === null || pLog.true_ev === ''
+      ? NaN
+      : parseFloat(pLog.true_ev);
+  let trueEVValue;
+  if (Number.isFinite(storedTrueEvRaw)) {
+    trueEVValue = storedTrueEvRaw;
+  } else {
+    const closedCount = Number.isFinite(totalClosed) ? totalClosed : 0;
+    const evWinRate =
+      closedCount < 30
+        ? (0.45 * (30 - closedCount) + (winRate || 0) * closedCount) / 30
+        : winRate;
+    const evLossRate = 1 - evWinRate;
+    trueEVValue = QuantMath.trueEV(evWinRate, pLogRr, evLossRate, 1);
+    console.warn(
+      `[DYNAMIC SHIELD] ${symbol}: true_ev thiếu trong trade_logs — tái tính EV=${trueEVValue.toFixed(3)} (winRate=${evWinRate.toFixed(3)}, rr=${pLogRr}).`
+    );
+  }
+
+  // ---- C1: liquidation estimate thật ----
+  const pLogEntry = parseFloat(pLog.entry);
+  const pLogSl = parseFloat(pLog.sl);
+  const pLogSize = parseFloat(pLog.position_size_usd);
+  const pLogLevRaw =
+    pLog.leverage === undefined || pLog.leverage === null || pLog.leverage === ''
+      ? 1
+      : parseFloat(pLog.leverage);
+  const pLogLev =
+    Number.isFinite(pLogLevRaw) && pLogLevRaw > 0 ? pLogLevRaw : 1;
+
+  const brackets = Array.isArray(leverageBracketsRes)
+    ? (leverageBracketsRes.find(b => b.symbol === symbol)?.brackets ||
+        defaultBrackets)
+    : defaultBrackets;
+  const bracketsAvailable = Array.isArray(brackets) && brackets.length > 0;
+
+  let liqEstimate = null;
+  let leverageExceedsExchangeCap = false;
+  let liqSafetyMargin = 0;
+
+  if (!Number.isFinite(pLogSize) || pLogSize <= 0) {
+    console.warn(
+      `[DYNAMIC SHIELD] ${symbol}: position_size_usd không hợp lệ (${pLog.position_size_usd}) — h4 sẽ fail.`
+    );
+  } else if (bracketsAvailable) {
+    const dir = pLog.direction === 'LONG' ? 'LONG' : 'SHORT';
+    liqEstimate = QuantMath.estimateLiquidation(
+      pLogSize,
+      pLogLev,
+      currentPrice,
+      dir,
+      brackets
+    );
+    if (liqEstimate) {
+      if (pLogLev > liqEstimate.maxLevForTier) {
+        // Cap sàn đổi từ lúc đặt -> invalidation THẬT
+        leverageExceedsExchangeCap = true;
+      }
+      const liqDistancePct =
+        Math.abs(currentPrice - liqEstimate.liqPrice) / currentPrice;
+      const slDistPct =
+        pLogEntry > 0 ? Math.abs(pLogEntry - pLogSl) / pLogEntry : 0;
+      liqSafetyMargin = slDistPct > 0 ? liqDistancePct / slDistPct : 0;
+    }
+  } else {
+    // Defensive: thiếu cấu hình brackets (defaultBrackets là const nên hầu như
+    // không xảy ra). Lệnh đã pass gate lúc đặt; không có dữ liệu mới cho thấy
+    // nguy hiểm -> fail-open + warn.
+    console.warn(
+      `[DYNAMIC SHIELD] ${symbol}: leverage brackets không khả dụng — bỏ qua gate h4 (fail-open).`
+    );
+    liqEstimate = { liqPrice: 0 };
+    liqSafetyMargin = 1.3;
+  }
+
+  return {
+    appliedRiskPercent: parseFloat(pLog.applied_risk_pct || 1),
+    positionSizeUSD: pLogSize,
+    theoreticalRR: pLogRr,
+    trueEVValue,
+    liqEstimate,
+    leverageExceedsExchangeCap,
+    liqSafetyMargin,
+    dynamicSlDistance: Math.abs(pLogEntry - pLogSl),
+    hasInsufficientMargin: false,
+    hasMinNotionalError: false
+  };
 }
 
 export function createMatrixScannerService(context) {
@@ -47,6 +241,9 @@ export function createMatrixScannerService(context) {
       console.log(`[RADAR] Bắt đầu chu kỳ quét Đa Khung Thời Gian (100% Dữ liệu thực)...`);
       const topSetups = [];
       const strategyDiagnostics = new Map();
+      // R2 (2026-08-10): reset mỗi cycle — accumulate near-miss của candidates
+      // không match; log 1 dòng tổng hợp cuối cycle (chống spam per-candidate).
+      const nearMissStats = new Map();
   
       try {
           // [VÁ LỖI 1]: Chỉ lấy các lệnh trong 12h qua để check Gate Cooldown chính xác nhất, tránh bị trôi dữ liệu khi limit(200)
@@ -161,7 +358,7 @@ export function createMatrixScannerService(context) {
           if (utcHour >= 13 && utcHour < 21) { tradingSession = 'NEW_YORK'; sessionMultiplier = 1.5; }
           if (day === 0 || day === 6) sessionMultiplier *= 0.5;
   
-          const targetIntervals = ['5m', '15m', '1h', '4h', '1d'];
+          const targetIntervals = TARGET_INTERVALS;
          
           const btcDomCache = new Map();
           const btcRegimeCache = new Map();
@@ -575,19 +772,18 @@ export function createMatrixScannerService(context) {
                                   )
                               };
                               
-                              // Giả lập MathCore cơ bản để cho chạy qua Gate
-                              const mockMathCore = {
-                                  appliedRiskPercent: parseFloat(pLog.applied_risk_pct || 1),
-                                  positionSizeUSD: parseFloat(pLog.position_size_usd || 10),
-                                  theoreticalRR: parseFloat(pLog.rr || 1.5),
-                                  trueEVValue: autoData.true_ev || 1.0, 
-                                  liqEstimate: null, // Đã đặt lệnh thành công nên không check lại thanh lý sàn
-                                  leverageExceedsExchangeCap: false,
-                                  liqSafetyMargin: 1.5,
-                                  dynamicSlDistance: Math.abs(pLogEntry - pLogSl),
-                                  hasInsufficientMargin: false,
-                                  hasMinNotionalError: false
-                              };
+                              // F6/F7 (C1/C2): math core THẬT từ dữ liệu trong scope
+                              // (pLog + leverageBracketsRes/defaultBrackets + currentPrice
+                              // + winRate/totalClosed) thay mock cứng: liqEstimate null →
+                              // h4 luôn fail hủy mọi PENDING; autoData.true_ev || 1.0 → h2 luôn pass.
+                              const mockMathCore = computePendingOrderMathCore(pLog, {
+                                  symbol,
+                                  currentPrice,
+                                  leverageBracketsRes,
+                                  defaultBrackets,
+                                  winRate,
+                                  totalClosed
+                              });
   
                               const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategy);
   
@@ -648,14 +844,14 @@ export function createMatrixScannerService(context) {
                                           liq_longs_vol: parseFloat(liqData.longs || 0),
                                           liq_shorts_vol: parseFloat(liqData.shorts || 0),
                                           soft_score: parseFloat(pLogScore.score),
-                                          gate_s1: pLogGates.softGates.find(g => g.id === 's1')?.passed || false,
-                                          gate_s2: pLogGates.softGates.find(g => g.id === 's2')?.passed || false,
-                                          gate_s3: pLogGates.softGates.find(g => g.id === 's3')?.passed || false,
-                                          gate_s4: pLogGates.softGates.find(g => g.id === 's4')?.passed || false,
-                                          gate_s5: pLogGates.softGates.find(g => g.id === 's5')?.passed || false,
-                                          gate_s6: pLogGates.softGates.find(g => g.id === 's6')?.passed || false,
-                                          gate_s7: pLogGates.softGates.find(g => g.id === 's7')?.passed || false,
-                                          gate_s8: pLogGates.softGates.find(g => g.id === 's8')?.passed || false,
+                                          gate_s1: pLogScore.checks?.checkS1 === true,
+                                          gate_s2: pLogScore.checks?.checkS2 === true,
+                                          gate_s3: pLogScore.checks?.checkS3 === true,
+                                          gate_s4: pLogScore.checks?.checkS4 === true,
+                                          gate_s5: pLogScore.checks?.checkS5 === true,
+                                          gate_s6: pLogScore.checks?.checkS6 === true,
+                                          gate_s7: pLogScore.checks?.checkS7 === true,
+                                          gate_s8: pLogScore.checks?.checkS8 === true,
                                           l1_structure: vectorDetails.l1, 
                                           l2_volatility: vectorDetails.l2, 
                                           l3_liq_event:
@@ -772,7 +968,12 @@ export function createMatrixScannerService(context) {
                                   symbol,
                                   assetTier
                               };
-                              const primaryStrategy = routeStrategy(routeInput);
+                              // R2 (2026-08-10): tính candidates MỘT lần, vừa
+                              // accumulate near-miss vừa truyền vào routeStrategy
+                              // (tránh tính 2 lần + không phá API hiện có).
+                              const allCandidates = evaluateStrategyCandidates(routeInput);
+                              accumulateNearMiss(allCandidates, nearMissStats);
+                              const primaryStrategy = routeStrategy(routeInput, { candidates: allCandidates });
                               // Shadow strategies are evaluated beside, not instead
                               // of, the existing live Adaptive lane.
                               const routedStrategies =
@@ -879,11 +1080,10 @@ export function createMatrixScannerService(context) {
                               const kellyDec = QuantMath.kellyCriterion(winRate, historicalRR, totalClosed);
   
                               const evalCapital = liveCapital > 0 ? liveCapital : 1000; 
-                              const passingScore = systemScoreTmp.passingScore || 50;
-                              const scoreRange = 100 - passingScore;
-                              const riskMultiplier = Math.max(0.5, Math.min(2.0, 0.5 + ((systemScoreTmp.score - passingScore) / scoreRange) * 1.5));
+                              // F1 (P1): bỏ riskMultiplier — appliedRiskPercent cố định bằng
+                              // baseRiskPct (1.0). Score chỉ còn làm gate, không phóng đại size.
                               const baseRiskPct = 1.0;
-                              let appliedRiskPercent = baseRiskPct * riskMultiplier;
+                              let appliedRiskPercent = baseRiskPct;
   
                               let riskAmountUSD = evalCapital * (appliedRiskPercent / 100);
                               let positionSizeUSD = riskAmountUSD / slPercentForSize; 
@@ -1131,8 +1331,10 @@ export function createMatrixScannerService(context) {
               })
               .join(', ');
           console.log(`[STRATEGY ROUTER] approved/routed — ${routerSummary || 'no candidates'}`);
+          const nearMissLine = formatNearMissLine(nearMissStats);
+          if (nearMissLine) console.log(nearMissLine);
           getConnectedClients().forEach(client => { if (client.readyState === 1) client.send(JSON.stringify({ type: 'SCAN_RESULTS', data: topSetups, isNewSignal: topSetups.length > 0 })); });
-          console.log(`[RADAR] Chu kỳ hoàn tất. Bắt được ${topSetups.length} Setups trên ${scanPool.length} Coins (5 Khung).`);
+          console.log(`[RADAR] Chu kỳ hoàn tất. Bắt được ${topSetups.length} Setups trên ${scanPool.length} Coins (${TARGET_INTERVALS.length} Khung).`);
       } catch (e) { console.error("[RADAR] Lỗi Engine Scanner:", e); }
   }
   

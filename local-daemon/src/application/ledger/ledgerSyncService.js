@@ -439,6 +439,19 @@ export function createLedgerSyncService(context = {}) {
                     const msbRes = QuantMath.detectMarketStructure ? QuantMath.detectMarketStructure(highs, lows, closes) : { msbState: 'None' };
                     const msbState = typeof msbRes === 'string' ? msbRes : (msbRes?.msbState || 'None');
 
+                    // VPIN THẬT từ klines: cột 9 = taker-buy base volume (buy),
+                    // sell = total base volume (cột 5) - buy. Lookback 50, trả 0 khi <50 mẫu.
+                    const takerBuyBase = klines.map(k => parseFloat(k[9]) || 0);
+                    const totalBase = klines.map(k => parseFloat(k[5]) || 0);
+                    const vpinValue = QuantMath.vpin
+                      ? QuantMath.vpin(
+                          takerBuyBase,
+                          totalBase.map((total, index) => Math.max(0, total - takerBuyBase[index])),
+                          totalBase,
+                          50
+                        )
+                      : 0;
+
                     const bookTicker = typeof marketDataCache.getBookTicker === 'function' ? marketDataCache.getBookTicker(log.symbol) : null;
                     let realSpreadPct = 0;
                     if (bookTicker?.bidPrice && bookTicker?.askPrice) {
@@ -452,8 +465,7 @@ export function createLedgerSyncService(context = {}) {
                     snapshot = {
                       autoData: {
                         msbState,
-                        vpinValue: 0.05,
-                        l1: 'Trend',
+                        vpinValue,
                         ema20,
                         atr14,
                         cmf
@@ -461,7 +473,9 @@ export function createLedgerSyncService(context = {}) {
                       apiMacro: {
                         realSpreadPct
                       },
-                      softScore: log.soft_score !== undefined && log.soft_score !== null ? parseFloat(log.soft_score) : 80
+                      softScore: log.soft_score !== undefined && log.soft_score !== null
+                        ? parseFloat(log.soft_score)
+                        : undefined
                     };
                   }
                 }

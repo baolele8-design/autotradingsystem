@@ -69,3 +69,60 @@ test('a blocked symbol cannot become executable even with the highest score', ()
   assert.deepEqual(result.validSetups.map(setup => setup.symbol), ['BTCUSDT']);
   assert.equal(result.filterStats.blockedSymbol, 1);
 });
+
+test('caps the number of returned setups by maxOpenPositions', () => {
+  const symbols = [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+    'ADAUSDT', 'LINKUSDT', 'DOTUSDT', 'AVAXUSDT', 'LTCUSDT'
+  ];
+  const setups = symbols.map((symbol, index) =>
+    live({
+      symbol,
+      score: 100 - index,
+      strategyId: `STRAT_${index}`
+    })
+  );
+
+  const result = selectExecutableSetups(setups, {
+    allowedIntervals: ['15m'],
+    minScore: 50,
+    now: 1_000_000
+  });
+
+  // default maxOpenPositions = 5, distinct strategies => no per-strategy cut
+  assert.equal(result.validSetups.length, 5);
+  assert.equal(result.filterStats.positionCap, 5);
+  assert.deepEqual(
+    result.validSetups.map(setup => setup.symbol),
+    symbols.slice(0, 5)
+  );
+  assert.deepEqual(
+    result.validSetups.map(setup => setup.score),
+    [100, 99, 98, 97, 96]
+  );
+});
+
+test('caps the number of setups per strategy by maxOpenPerStrategy', () => {
+  const symbols = [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+    'ADAUSDT', 'LINKUSDT', 'DOTUSDT', 'AVAXUSDT', 'LTCUSDT'
+  ];
+  const setups = symbols.map((symbol, index) =>
+    live({ symbol, score: 100 - index, strategyId: 'ALPHA' })
+  );
+
+  const result = selectExecutableSetups(setups, {
+    allowedIntervals: ['15m'],
+    minScore: 50,
+    now: 1_000_000,
+    maxOpenPositions: 10,
+    maxOpenPerStrategy: 2
+  });
+
+  assert.equal(result.validSetups.length, 2);
+  assert.equal(result.filterStats.positionCap, 8);
+  assert.deepEqual(
+    result.validSetups.map(setup => setup.score),
+    [100, 99]
+  );
+});
