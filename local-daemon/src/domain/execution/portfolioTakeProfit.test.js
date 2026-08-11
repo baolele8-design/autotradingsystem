@@ -72,14 +72,14 @@ test('computeGreenTotal xử lý input rỗng / không phải array', () => {
   assert.deepEqual(computeGreenTotal([], null), { totalGreen: 0, candidates: [] });
 });
 
-test('shouldTriggerPortfolioTp: 9.9/10.1 trigger, dưới 9.9 không', () => {
-  assert.equal(PORTFOLIO_TP_THRESHOLD, 10);
+test('shouldTriggerPortfolioTp: 14.9/15.1 trigger, dưới 14.9 không', () => {
+  assert.equal(PORTFOLIO_TP_THRESHOLD, 15);
   assert.equal(PORTFOLIO_TP_TOLERANCE, 0.1);
-  assert.equal(shouldTriggerPortfolioTp(9.9), true);
-  assert.equal(shouldTriggerPortfolioTp(10.1), true);
-  assert.equal(shouldTriggerPortfolioTp(8), false);
+  assert.equal(shouldTriggerPortfolioTp(14.9), true);
+  assert.equal(shouldTriggerPortfolioTp(15.1), true);
+  assert.equal(shouldTriggerPortfolioTp(14), false);
   assert.equal(shouldTriggerPortfolioTp(0), false);
-  assert.equal(shouldTriggerPortfolioTp(9.89), false);
+  assert.equal(shouldTriggerPortfolioTp(14.89), false);
   assert.equal(shouldTriggerPortfolioTp(NaN), false);
-  assert.equal(shouldTriggerPortfolioTp(10.1, 10), true);
+  assert.equal(shouldTriggerPortfolioTp(15.1, 15), true);
 });

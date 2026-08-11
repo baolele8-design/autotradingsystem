@@ -237,7 +237,7 @@ test('temporal barrier uses immutable planned holding cycles before legacy value
   );
 });
 
-test('PORTFOLIO_TP: đóng chỉ các vị thế lời khi tổng green >= 9.9; giữ lệnh lỗ/neutral', async () => {
+test('PORTFOLIO_TP: đóng chỉ các vị thế lời khi tổng green >= 14.9; giữ lệnh lỗ/neutral', async () => {
   const now = Date.now();
   const updates = [];
   const tradeAave = {
@@ -271,7 +271,7 @@ test('PORTFOLIO_TP: đóng chỉ các vị thế lời khi tổng green >= 9.9; 
     })
   };
   const positions = [
-    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '10.0' },
+    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '15.0' },
     { symbol: 'DOTUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '103', positionSide: 'BOTH', unrealizedProfit: '-3.0' },
     { symbol: 'BTCUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '100', positionSide: 'BOTH', unrealizedProfit: '0' }
   ];
@@ -332,7 +332,7 @@ test('PORTFOLIO_TP: đóng chỉ các vị thế lời khi tổng green >= 9.9; 
   assert.equal(aaveDeletes.length, 2, 'hủy SL/TP CO của lệnh đã chốt');
 });
 
-test('PORTFOLIO_TP: tổng green < 9.9 thì không đóng gì', async () => {
+test('PORTFOLIO_TP: tổng green < 14.9 thì không đóng gì', async () => {
   const now = Date.now();
   const trade = {
     id: 'trade-low', symbol: 'AAVEUSDT', direction: 'SHORT', status: 'OPEN',
@@ -411,7 +411,7 @@ test('PORTFOLIO_TP: không tái xử lý lệnh đã chốt trong cùng cycle (b
     })
   };
   const positions = [
-    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '10.0' }
+    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '15.0' }
   ];
   const sentRequests = [];
   const oldStops = [

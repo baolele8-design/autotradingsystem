@@ -1,4 +1,4 @@
-export const PORTFOLIO_TP_THRESHOLD = 10;
+export const PORTFOLIO_TP_THRESHOLD = 15;
 export const PORTFOLIO_TP_TOLERANCE = 0.1;
 
 export function isEngineOwnedPosition(position, openTrades) {
