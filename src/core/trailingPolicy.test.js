@@ -7,11 +7,11 @@ import {
 } from './trailingPolicy.js';
 
 const UNIFIED = {
-    beTrigger: 0.35,
-    lockTrigger: 0.6,
-    lockAmount: 0.35,
-    trailTrigger: 1.0,
-    trailDist: 0.5
+    beTrigger: 0.2,
+    lockTrigger: 0.4,
+    lockAmount: 0.2,
+    trailTrigger: 0.6,
+    trailDist: 0.2
 };
 
 test('uses the unified schedule for every strategy (directive 2026-08-07)', () => {
@@ -38,17 +38,17 @@ test('moves a long trade through BE, LOCK and TRAIL using immutable R', () => {
         storedHighWater: 100
     };
 
-    const be = calculateTrailingDecision({ ...common, markPrice: 102.5 });
+    const be = calculateTrailingDecision({ ...common, markPrice: 101 });
     assert.equal(be.nextStage, 'BE');
     assert.equal(be.targetSl, 100.25);
 
-    const lock = calculateTrailingDecision({ ...common, markPrice: 105 });
-    assert.equal(lock.nextStage, 'TRAIL');
-    assert.equal(lock.targetSl, 102.5);
+    const lock = calculateTrailingDecision({ ...common, markPrice: 102 });
+    assert.equal(lock.nextStage, 'LOCK');
+    assert.equal(lock.targetSl, 101);
 
-    const trail = calculateTrailingDecision({ ...common, markPrice: 110 });
+    const trail = calculateTrailingDecision({ ...common, markPrice: 103 });
     assert.equal(trail.nextStage, 'TRAIL');
-    assert.equal(trail.targetSl, 107.5);
+    assert.equal(trail.targetSl, 102);
 });
 
 test('mirrors stop calculations for short trades', () => {
@@ -63,7 +63,7 @@ test('mirrors stop calculations for short trades', () => {
 
     assert.equal(decision.nextStage, 'TRAIL');
     assert.equal(decision.highWaterPrice, 90);
-    assert.equal(decision.targetSl, 92.5);
+    assert.equal(decision.targetSl, 91);
 });
 
 test('never regresses a previously achieved stage after a retracement', () => {
@@ -79,7 +79,7 @@ test('never regresses a previously achieved stage after a retracement', () => {
 
     assert.equal(decision.currentProfitR, 0.8);
     assert.equal(decision.nextStage, 'TRAIL');
-    assert.equal(decision.targetSl, 109.5);
+    assert.equal(decision.targetSl, 111);
 });
 
 test('recovers TRAIL from persisted high-water even if current price retraced', () => {
@@ -96,6 +96,6 @@ test('recovers TRAIL from persisted high-water even if current price retraced', 
     assert.equal(decision.currentProfitR, 1.5);
     assert.equal(decision.highWaterR, 2.4);
     assert.equal(decision.nextStage, 'TRAIL');
-    assert.equal(decision.targetSl, 109.5);
+    assert.equal(decision.targetSl, 111);
 });
 

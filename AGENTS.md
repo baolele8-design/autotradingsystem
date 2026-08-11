@@ -148,11 +148,11 @@ together when ownership, lifecycle, risk, or order contracts change.
 
 See `SYSTEM_RULES.md` for the full verified/gap register.
 
-## 6. Permanent unified trailing schedule (2026-08-07)
+## 6. Permanent unified trailing schedule (2026-08-11)
 
 - **Policy:** one schedule for **every** strategy, asset tier and regime —
-  `BE 0.35R / LOCK 0.6R locking +0.35R / TRAIL 1.0R trailing 0.5R`
-  (owner directive 2026-08-07, superseding the 2026-08-06 adaptive-only floor).
+  `BE 0.2R / LOCK 0.4R locking +0.2R / TRAIL 0.6R trailing 0.2R`
+  (owner directive 2026-08-11, superseding the 2026-08-07 unified schedule).
   Family profiles, keyword fallbacks, tier offsets and regime buckets are
   removed; the owner's rationale is to take profits earlier and trail tightly.
 - **Enforcement, three layers:**
@@ -167,11 +167,12 @@ See `SYSTEM_RULES.md` for the full verified/gap register.
      `activation_block: 'PERMANENT_PINNED_SCHEDULE'`.
 - The shadow `rollback` lane in `local-daemon/src/domain/analytics/liveTradePath.js`
   resolves to the same pinned policy; there is no divergent rollback schedule.
-- History for rollback/debug only: the 2026-08-06 adaptive floor was
-  `BE 0.40R / LOCK 1.00R / +0.35R / TRAIL 1.50R / 0.60R`; before that,
-  family/tier keyword schedules existed (see the 2026-08-03 observation
-  schedule and pre-observation per-tier values below). Re-opening this
-  schedule requires a new owner directive.
+- History for rollback/debug only: the 2026-08-07 unified schedule was
+  `BE 0.35R / LOCK 0.6R locking +0.35R / TRAIL 1.0R trailing 0.5R`; the
+  2026-08-06 adaptive floor was `BE 0.40R / LOCK 1.00R / +0.35R / TRAIL 1.50R / 0.60R`;
+  before that, family/tier keyword schedules existed (see the 2026-08-03
+  observation schedule and pre-observation per-tier values below). Re-opening
+  this schedule requires a new owner directive.
 
 ## 7. Binance REST rate-limit contract
 

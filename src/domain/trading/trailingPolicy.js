@@ -5,19 +5,19 @@ export const PROTECTION_STAGE_RANK = Object.freeze({
     TRAIL: 3
 });
 
-// UNIFIED TRAILING SCHEDULE (owner directive 2026-08-07):
+// UNIFIED TRAILING SCHEDULE (owner directive 2026-08-11):
 // ONE schedule for EVERY strategy, asset tier and regime —
-//   BE 0.35R / LOCK 0.6R locking +0.35R / TRAIL 1.0R trailing 0.5R.
+//   BE 0.2R / LOCK 0.4R locking +0.2R / TRAIL 0.6R trailing 0.2R.
 // Family profiles, keyword fallbacks, tier offsets and regime buckets are
 // deliberately removed; every cell resolves to this single schedule and the
 // optimizer can never override it (see isPinnedTrailingPolicyCell and
 // resolveOptimizedTrailingPolicy). History is recorded in AGENTS.md §6.
 const UNIFIED_TRAILING_SCHEDULE = Object.freeze({
-  beTrigger: 0.35,
-  lockTrigger: 0.6,
-  lockAmount: 0.35,
-  trailTrigger: 1.0,
-  trailDist: 0.5
+  beTrigger: 0.2,
+  lockTrigger: 0.4,
+  lockAmount: 0.2,
+  trailTrigger: 0.6,
+  trailDist: 0.2
 });
 
 export function isPinnedTrailingPolicyCell() {

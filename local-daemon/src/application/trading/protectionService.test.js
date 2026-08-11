@@ -146,7 +146,7 @@ test('persists the verified replacement stop algoId', async () => {
       request.method === 'POST' &&
       request.endpoint === '/fapi/v1/algoOrder'
     ).params.triggerPrice,
-    '107.5'
+    '109.0'
   );
 });
 

@@ -551,7 +551,7 @@ test('forces a fifteen-sample regime proposal back to baseline (pinned schedule)
 });
 
 test('learns BTC trailing context hierarchically with the same sample guards', () => {
-  const bullish = Array.from({ length: MIN_MATRIX_SAMPLES }, (_, index) =>
+  const bullish = Array.from({ length: 35 }, (_, index) =>
     makeTrade({
       id: index + 1,
       strategy_name: 'ADAPTIVE_LONG_FALLBACK [BOT]',
@@ -564,9 +564,9 @@ test('learns BTC trailing context hierarchically with the same sample guards', (
       max_adverse_excursion_usd: 0.25
     })
   );
-  const bearish = Array.from({ length: MIN_MATRIX_SAMPLES }, (_, index) =>
+  const bearish = Array.from({ length: 35 }, (_, index) =>
     makeTrade({
-      id: MIN_MATRIX_SAMPLES + index + 1,
+      id: 35 + index + 1,
       strategy_name: 'ADAPTIVE_LONG_FALLBACK [BOT]',
       asset_tier: 'Tier 2: Liquid Majors',
       regime_at_entry: 'Range',
@@ -586,7 +586,7 @@ test('learns BTC trailing context hierarchically with the same sample guards', (
   const parent = cell.dynamic_trailing.by_regime.MEAN_REVERTING;
   const btcProposal = parent.by_btc_regime.BULLISH_TREND;
   assert.equal(btcProposal.status, 'BASELINE');
-  assert.equal(btcProposal.sample_size, MIN_MATRIX_SAMPLES);
+  assert.equal(btcProposal.sample_size, 35);
   assert.equal(
     btcProposal.activation_block,
     'PERMANENT_PINNED_SCHEDULE'
