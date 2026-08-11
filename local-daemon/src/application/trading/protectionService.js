@@ -196,6 +196,8 @@ export function createProtectionService(context) {
           );
           if (!Array.isArray(positionsRes)) return;
 
+          const portfolioClosedTradeIds = new Set();
+
           const { totalGreen, candidates } = computeGreenTotal(
               positionsRes,
               queriedTrades
@@ -271,6 +273,7 @@ export function createProtectionService(context) {
                               position.markPrice,
                           exit_reason: 'PORTFOLIO_TP'
                       });
+                      portfolioClosedTradeIds.add(trade.id);
                       console.log(
                           `🎯 [PORTFOLIO TP] Đã chốt ${candidate.symbol} ` +
                           `+$${candidate.pnl.toFixed(2)} (tổng lời $${totalGreen.toFixed(2)}).`
@@ -290,6 +293,9 @@ export function createProtectionService(context) {
           const processedSymbols = new Set();
   
           for (const trade of openTrades) {
+              if (portfolioClosedTradeIds.has(trade.id)) {
+                  continue;
+              }
               if (processedSymbols.has(trade.symbol)) {
                   console.error(
                       `[TRAILING FAIL-CLOSED] Có nhiều OPEN log cho ${trade.symbol}; chỉ xử lý log mới nhất.`

@@ -380,3 +380,85 @@ test('PORTFOLIO_TP: tổng green < 9.9 thì không đóng gì', async () => {
   assert.equal(closes.length, 0);
   assert.equal(updates.some(u => u.status === 'CLOSED'), false);
 });
+
+test('PORTFOLIO_TP: không tái xử lý lệnh đã chốt trong cùng cycle (bỏ qua time barrier + không ghi đè exit_reason)', async () => {
+  const now = Date.now();
+  const updates = [];
+  const trade = {
+    id: 'trade-aave', symbol: 'AAVEUSDT', direction: 'SHORT', status: 'OPEN',
+    type: 'FUTURES', entry: 100, sl: 110, initial_risk_per_coin: 5,
+    opened_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    protection_stage: 'NONE', high_water_price: 100, high_water_r: 0,
+    holding_cycles: 1, interval: '1h',
+    strategy_name: 'S', asset_tier: 'Tier 2',
+    regime_at_entry: 'Expansion', btc_regime_at_entry: 'BULLISH_TREND',
+    sl_algo_id: 21, tp_algo_id: 22
+  };
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({ data: [trade], error: null })
+        })
+      }),
+      update: values => ({
+        eq: async () => {
+          updates.push(values);
+          return { error: null };
+        }
+      })
+    })
+  };
+  const positions = [
+    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '10.0' }
+  ];
+  const sentRequests = [];
+  const oldStops = [
+    { algoId: 21, orderType: 'STOP_MARKET', symbol: 'AAVEUSDT', side: 'BUY', triggerPrice: '110', clientAlgoId: 'qts-sl-initial' },
+    { algoId: 22, orderType: 'TAKE_PROFIT_MARKET', symbol: 'AAVEUSDT', side: 'BUY', triggerPrice: '95', clientAlgoId: 'qts-tp-initial' }
+  ];
+  const { runSmartTrailingEngine } = createProtectionService({
+    getCurrentAiModel: () => null,
+    markPriceCache: new Map([
+      ['AAVEUSDT', { price: 94, high: 94, low: 100, updatedAt: now }]
+    ]),
+    safeFetch: async () => ({
+      symbols: [
+        { symbol: 'AAVEUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.01' }] }
+      ]
+    }),
+    readBinanceReq: async endpoint => {
+      if (endpoint === '/fapi/v2/positionRisk') return positions;
+      if (endpoint === '/fapi/v1/openOrders') return [];
+      if (endpoint === '/fapi/v1/openAlgoOrders') return oldStops;
+      return [];
+    },
+    sendBinanceReq: async (method, endpoint, params) => {
+      sentRequests.push({ method, endpoint, params });
+      return { data: {} };
+    },
+    supabase
+  });
+
+  await runSmartTrailingEngine();
+
+  const closes = sentRequests.filter(r =>
+    r.method === 'POST' && r.endpoint === '/fapi/v1/order' && r.params.type === 'MARKET'
+  );
+  assert.equal(closes.length, 1, 'chỉ 1 MARKET close (portfolio TP), không tái chốt trong cùng cycle');
+  assert.equal(closes[0].params.symbol, 'AAVEUSDT');
+  assert.equal(closes[0].params.side, 'BUY');
+
+  const closedUpdates = updates.filter(u => u.status === 'CLOSED');
+  assert.equal(closedUpdates.length, 1, 'chỉ 1 lần ghi CLOSED');
+  assert.equal(closedUpdates[0].exit_reason, 'PORTFOLIO_TP');
+  assert.ok(
+    !updates.some(u => u.exit_reason === 'TEMPORAL_BARRIER_HIT'),
+    'không ghi đè exit_reason bằng TEMPORAL_BARRIER_HIT'
+  );
+  assert.ok(
+    !updates.some(u => u.exit_reason === 'TEMPORAL_BARRIER_PENDING'),
+    'không ghi TEMPORAL_BARRIER_PENDING lên lệnh đã chốt portfolio TP'
+  );
+});
