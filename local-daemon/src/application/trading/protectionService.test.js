@@ -236,3 +236,147 @@ test('temporal barrier uses immutable planned holding cycles before legacy value
     false
   );
 });
+
+test('PORTFOLIO_TP: đóng chỉ các vị thế lời khi tổng green >= 9.9; giữ lệnh lỗ/neutral', async () => {
+  const now = Date.now();
+  const updates = [];
+  const tradeAave = {
+    id: 'trade-aave', symbol: 'AAVEUSDT', direction: 'SHORT', status: 'OPEN',
+    type: 'FUTURES', entry: 100, sl: 110, initial_risk_per_coin: 5,
+    opened_at: new Date(now).toISOString(), created_at: new Date(now).toISOString(),
+    protection_stage: 'NONE', high_water_price: 100, high_water_r: 0,
+    holding_cycles: 10, strategy_name: 'S', asset_tier: 'Tier 2',
+    regime_at_entry: 'Expansion', btc_regime_at_entry: 'BULLISH_TREND',
+    sl_algo_id: 21, tp_algo_id: 22
+  };
+  const tradeDot = {
+    ...tradeAave, id: 'trade-dot', symbol: 'DOTUSDT', sl_algo_id: 31, tp_algo_id: 32
+  };
+  const tradeBtc = {
+    ...tradeAave, id: 'trade-btc', symbol: 'BTCUSDT', sl_algo_id: 41, tp_algo_id: 42
+  };
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({ data: [tradeAave, tradeDot, tradeBtc], error: null })
+        })
+      }),
+      update: values => ({
+        eq: async () => {
+          updates.push(values);
+          return { error: null };
+        }
+      })
+    })
+  };
+  const positions = [
+    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '94', positionSide: 'BOTH', unrealizedProfit: '10.0' },
+    { symbol: 'DOTUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '103', positionSide: 'BOTH', unrealizedProfit: '-3.0' },
+    { symbol: 'BTCUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '100', positionSide: 'BOTH', unrealizedProfit: '0' }
+  ];
+  const sentRequests = [];
+  const oldStops = [
+    { algoId: 21, orderType: 'STOP_MARKET', symbol: 'AAVEUSDT', side: 'BUY', triggerPrice: '110', clientAlgoId: 'qts-sl-initial' },
+    { algoId: 22, orderType: 'TAKE_PROFIT_MARKET', symbol: 'AAVEUSDT', side: 'BUY', triggerPrice: '95', clientAlgoId: 'qts-tp-initial' },
+    { algoId: 31, orderType: 'STOP_MARKET', symbol: 'DOTUSDT', side: 'BUY', triggerPrice: '110', clientAlgoId: 'qts-sl-initial' },
+    { algoId: 41, orderType: 'STOP_MARKET', symbol: 'BTCUSDT', side: 'BUY', triggerPrice: '110', clientAlgoId: 'qts-sl-initial' }
+  ];
+  const { runSmartTrailingEngine } = createProtectionService({
+    getCurrentAiModel: () => null,
+    markPriceCache: new Map([
+      ['AAVEUSDT', { price: 94, high: 94, low: 100, updatedAt: now }],
+      ['DOTUSDT', { price: 103, high: 103, low: 100, updatedAt: now }],
+      ['BTCUSDT', { price: 100, high: 100, low: 100, updatedAt: now }]
+    ]),
+    safeFetch: async () => ({
+      symbols: [
+        { symbol: 'AAVEUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.01' }] },
+        { symbol: 'DOTUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.01' }] },
+        { symbol: 'BTCUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.01' }] }
+      ]
+    }),
+    readBinanceReq: async endpoint => {
+      if (endpoint === '/fapi/v2/positionRisk') return positions;
+      if (endpoint === '/fapi/v1/openOrders') return [];
+      if (endpoint === '/fapi/v1/openAlgoOrders') return oldStops;
+      return [];
+    },
+    sendBinanceReq: async (method, endpoint, params) => {
+      sentRequests.push({ method, endpoint, params });
+      return { data: {} };
+    },
+    supabase
+  });
+
+  await runSmartTrailingEngine();
+
+  const closes = sentRequests.filter(r =>
+    r.method === 'POST' && r.endpoint === '/fapi/v1/order' && r.params.type === 'MARKET'
+  );
+  assert.equal(closes.length, 1);
+  assert.equal(closes[0].params.symbol, 'AAVEUSDT');
+  assert.equal(closes[0].params.side, 'BUY');
+  assert.equal(closes[0].params.quantity, 1);
+
+  const closedUpdate = updates.find(u => u.status === 'CLOSED');
+  assert.ok(closedUpdate, 'phải ghi CLOSED');
+  assert.equal(closedUpdate.exit_reason, 'PORTFOLIO_TP');
+  assert.equal(closedUpdate.close_price, 94);
+  assert.equal(updates.filter(u => u.status === 'CLOSED').length, 1, 'chỉ 1 lệnh bị đóng');
+
+  const aaveDeletes = sentRequests.filter(r =>
+    r.method === 'DELETE' && r.endpoint === '/fapi/v1/algoOrder' &&
+    (r.params.algoId === 21 || r.params.algoId === 22)
+  );
+  assert.equal(aaveDeletes.length, 2, 'hủy SL/TP CO của lệnh đã chốt');
+});
+
+test('PORTFOLIO_TP: tổng green < 9.9 thì không đóng gì', async () => {
+  const now = Date.now();
+  const trade = {
+    id: 'trade-low', symbol: 'AAVEUSDT', direction: 'SHORT', status: 'OPEN',
+    type: 'FUTURES', entry: 100, sl: 110, initial_risk_per_coin: 5,
+    opened_at: new Date(now).toISOString(), created_at: new Date(now).toISOString(),
+    protection_stage: 'NONE', high_water_price: 100, high_water_r: 0,
+    holding_cycles: 10, strategy_name: 'S', asset_tier: 'Tier 2',
+    regime_at_entry: 'Expansion', btc_regime_at_entry: 'BULLISH_TREND'
+  };
+  const updates = [];
+  const supabase = {
+    from: () => ({
+      select: () => ({ eq: () => ({ eq: async () => ({ data: [trade], error: null }) }) }),
+      update: values => ({ eq: async () => { updates.push(values); return { error: null }; } })
+    })
+  };
+  const positions = [
+    { symbol: 'AAVEUSDT', positionAmt: '-1', entryPrice: '100', markPrice: '95', positionSide: 'BOTH', unrealizedProfit: '5.0' }
+  ];
+  const sentRequests = [];
+  const { runSmartTrailingEngine } = createProtectionService({
+    getCurrentAiModel: () => null,
+    markPriceCache: new Map([['AAVEUSDT', { price: 95, high: 95, low: 100, updatedAt: now }]]),
+    safeFetch: async () => ({
+      symbols: [{ symbol: 'AAVEUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.01' }] }]
+    }),
+    readBinanceReq: async endpoint => {
+      if (endpoint === '/fapi/v2/positionRisk') return positions;
+      if (endpoint === '/fapi/v1/openOrders') return [];
+      if (endpoint === '/fapi/v1/openAlgoOrders') return [];
+      return [];
+    },
+    sendBinanceReq: async (method, endpoint, params) => {
+      sentRequests.push({ method, endpoint, params });
+      return { data: {} };
+    },
+    supabase
+  });
+
+  await runSmartTrailingEngine();
+
+  const closes = sentRequests.filter(r =>
+    r.method === 'POST' && r.endpoint === '/fapi/v1/order' && r.params.type === 'MARKET'
+  );
+  assert.equal(closes.length, 0);
+  assert.equal(updates.some(u => u.status === 'CLOSED'), false);
+});

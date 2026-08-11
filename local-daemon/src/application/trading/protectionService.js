@@ -18,6 +18,10 @@ import {
   replaceStopSafely,
   selectReplaceableStopOrders
 } from '../../domain/orders/trailingOrders.js';
+import {
+  computeGreenTotal,
+  shouldTriggerPortfolioTp
+} from '../../domain/execution/portfolioTakeProfit.js';
 
 const INTERVAL_MS = {
   '5m': 300000,
@@ -191,7 +195,95 @@ export function createProtectionService(context) {
               { priority: 'protection' }
           );
           if (!Array.isArray(positionsRes)) return;
-  
+
+          const { totalGreen, candidates } = computeGreenTotal(
+              positionsRes,
+              queriedTrades
+          );
+          if (shouldTriggerPortfolioTp(totalGreen)) {
+              for (const candidate of candidates) {
+                  const position = positionsRes.find(p => p.symbol === candidate.symbol);
+                  const trade = queriedTrades.find(t =>
+                      t.symbol === candidate.symbol && t.status === 'OPEN'
+                  );
+                  if (!position || !trade) continue;
+                  try {
+                      const mutationResult = await withSymbolOrderLock(
+                          candidate.symbol,
+                          async () => {
+                              const closeSide = trade.direction === 'LONG' ? 'SELL' : 'BUY';
+                              const closeQty = Math.abs(
+                                  Number.parseFloat(position.positionAmt)
+                              );
+                              await sendBinanceReq(
+                                  'POST',
+                                  '/fapi/v1/order',
+                                  makePositionReductionPayload(position, {
+                                      symbol: candidate.symbol,
+                                      side: closeSide,
+                                      type: 'MARKET',
+                                      quantity: closeQty,
+                                      newClientOrderId: makeExitClientOrderId(
+                                          'portfolio-tp',
+                                          trade.id
+                                      )
+                                  })
+                              );
+                              try {
+                                  const remainingOrders =
+                                      await readSymbolOpenOrders(candidate.symbol);
+                                  if (remainingOrders) {
+                                      for (const order of remainingOrders) {
+                                          if (
+                                              isOwnedAlgoOrder(order) &&
+                                              (
+                                                  isStopLossOrder(order) ||
+                                                  isTakeProfitOrder(order)
+                                              )
+                                          ) {
+                                              await cancelExactOrder(
+                                                  candidate.symbol,
+                                                  order
+                                              );
+                                          }
+                                      }
+                                  }
+                              } catch (cleanupError) {
+                                  console.error(
+                                      `[PORTFOLIO TP CLEANUP] ${candidate.symbol}:`,
+                                      cleanupError.response?.data?.msg ||
+                                      cleanupError.message
+                                  );
+                              }
+                          }
+                      );
+                      if (mutationResult?.skipped) {
+                          console.log(
+                              `[PORTFOLIO TP SKIP] ${candidate.symbol} đang có mutation khác; thử lại vòng sau.`
+                          );
+                          continue;
+                      }
+
+                      await persistTrailingState(trade.id, {
+                          status: 'CLOSED',
+                          close_price:
+                              markPriceCache.get(candidate.symbol)?.price ??
+                              position.markPrice,
+                          exit_reason: 'PORTFOLIO_TP'
+                      });
+                      console.log(
+                          `🎯 [PORTFOLIO TP] Đã chốt ${candidate.symbol} ` +
+                          `+$${candidate.pnl.toFixed(2)} (tổng lời $${totalGreen.toFixed(2)}).`
+                      );
+                  } catch (error) {
+                      console.error(
+                          `❌ [PORTFOLIO TP] Không chốt được ${candidate.symbol}:`,
+                          error.response?.data?.msg || error.message
+                      );
+                  }
+              }
+          }
+
           const openTrades = [...queriedTrades].sort(
               (a, b) => new Date(b.created_at) - new Date(a.created_at)
           );
