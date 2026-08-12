@@ -169,7 +169,7 @@ const processSignals = async (topSetups) => {
 
         // Lọc điều kiện thực thi trước rồi mới khóa symbol. PAPER/invalid
         // setup không được phép che mất một setup LIVE hợp lệ phía sau.
-        const { filterStats, validSetups } = selectExecutableSetups(
+        const { filterStats, validSetups, btcGateBlocked } = selectExecutableSetups(
             topSetups,
             {
                 actionCooldowns,
@@ -179,10 +179,23 @@ const processSignals = async (topSetups) => {
             }
         );
 
+        // SHADOW: ghi khoản lỗ tránh được ước tính cho từng lệnh bị chặn bởi
+        // BTC downtrend gate (chặn thật, shadow chỉ đo lường hiệu quả).
+        for (const blocked of btcGateBlocked || []) {
+            const estLossUsd = (blocked.estimatedAvgR || 0) *
+                Math.max(0.1, parseFloat(blocked.risk_amount_usd) || allocation.fixedSizeUsd * 0.02);
+            console.log(
+                `[SHADOW BTC GATE] ${blocked.symbol} | ${blocked.direction} ${blocked.assetTier} | ` +
+                `BTC ${blocked.regime} | score ${blocked.score?.toFixed?.(1) ?? blocked.score} | ` +
+                `ước tính lỗ tránh được ~$${Math.abs(estLossUsd).toFixed(2)} (${(blocked.estimatedAvgR || 0).toFixed(2)}R)`
+            );
+        }
+
         // BÁO CÁO LÝ DO CẮT TÍN HIỆU
         console.log(`🔍 [BỘ LỌC BOT] Báo cáo rà soát ${topSetups.length} tín hiệu:`);
         console.log(`   ├─ Cấm Khung giờ (VD: 5m, 1M): ${filterStats.badInterval}`);
         console.log(`   ├─ Coin bị chặn mở vị thế mới: ${filterStats.blockedSymbol}`);
+        console.log(`   ├─ BTC Downtrend Gate (SHORT Tier1/2): ${filterStats.btcRegimeBlocked}`);
         console.log(`   ├─ Trùng Coin đang chạy/treo: ${filterStats.duplicate}`);
         console.log(`   ├─ Trùng Coin đang bị Khóa (Cooldown 5p): ${filterStats.cooldown}`);
         console.log(`   ├─ Điểm yếu (Dưới ${CONFIG.minScore}đ): ${filterStats.lowScore}`);

@@ -155,6 +155,21 @@ export function resolveExitReason(log, exitTrade, algoStates = {}, algoCleanup =
   if (exitClientOrderId.startsWith('qts-ex-time-')) {
     return 'TEMPORAL_BARRIER_HIT';
   }
+  if (exitClientOrderId.startsWith('qts-ex-pbtc-')) {
+    return 'PORTFOLIO_TP_BTC_BREAK';
+  }
+  if (exitClientOrderId.startsWith('qts-ex-ptp-')) {
+    return 'TAKE_PROFIT_HIT';
+  }
+  if (exitClientOrderId.startsWith('qts-tp-')) {
+    return 'TAKE_PROFIT_HIT';
+  }
+  if (exitClientOrderId.startsWith('qts-sl-')) {
+    return log.trailing_activated === true ||
+      String(log.protection_stage || 'NONE').toUpperCase() !== 'NONE'
+      ? 'TRAILING_STOP_HIT'
+      : 'STOP_LOSS_HIT';
+  }
 
   const exitOrderId = exitTrade?.orderId;
   const matchesTriggeredAlgo = state => {
@@ -196,6 +211,34 @@ export function resolveExitReason(log, exitTrade, algoStates = {}, algoCleanup =
       ? 'TRAILING_STOP_HIT'
       : 'STOP_LOSS_HIT';
   }
+
+  // A1-1: diagnostic trace — every UNCLASSIFIED resolution should be
+  // inspectable in daemon logs to recover why the exit could not be
+  // attributed (stored reason empty, client prefix unknown, no triggered
+  // algo matched the exit fill, cleanup failures). Logging only; the
+  // return contract is unchanged.
+  console.warn('[LEDGER UNCLASSIFIED]', {
+    symbol: log.symbol,
+    direction: log.direction,
+    storedReason,
+    exitClientOrderId,
+    exitOrderId,
+    tpAlgo: {
+      algoStatus: algoStates.tp?.algoStatus ?? null,
+      actualOrderId: algoStates.tp?.actualOrderId ?? null
+    },
+    slAlgo: {
+      algoStatus: algoStates.sl?.algoStatus ?? null,
+      actualOrderId: algoStates.sl?.actualOrderId ?? null
+    },
+    cleanupFailed: Array.isArray(algoCleanup?.failed)
+      ? algoCleanup.failed
+      : [],
+    branchFail: [
+      !isTpAlgoTriggered && 'tp-algo-not-triggered',
+      !isSlAlgoTriggered && 'sl-algo-not-triggered'
+    ].filter(Boolean)
+  });
 
   return 'UNCLASSIFIED_EXCHANGE_CLOSE';
 }

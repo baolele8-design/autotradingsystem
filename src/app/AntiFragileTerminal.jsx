@@ -186,7 +186,8 @@ export default function AntiFragileTerminal() {
         dynamicMinNotionals,
         systemScore,
         intervalTime,
-        activeTierClass
+        activeTierClass,
+        btcRegime: tradeSetup.btcRegime
       }),
     [
       autoData,

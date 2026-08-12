@@ -203,6 +203,39 @@ test('creates deterministic owned IDs for forced lifecycle exits', () => {
     assert.ok(temporal.length <= 36);
 });
 
+test('creates owned exit IDs for portfolio TP closes (ptp) distinct from panic and pbtc (A1-3)', () => {
+    const ptp = makeExitClientOrderId('portfolio-tp', 'trade-123');
+    const panic = makeExitClientOrderId('panic', 'trade-123');
+    const pbtc = makeExitClientOrderId('portfolio-btc', 'trade-123');
+
+    assert.equal(ptp, 'qts-ex-ptp-trade123');
+    assert.notEqual(ptp, panic);
+    assert.notEqual(ptp, pbtc);
+    assert.equal(isOwnedAlgoOrder({ clientOrderId: ptp }), true);
+    assert.ok(ptp.length <= 36);
+});
+
+test('creates owned exit IDs for portfolio BTC-break closes (pbtc) distinct from panic', () => {
+    const pbtc = makeExitClientOrderId('portfolio-btc', 'trade-123');
+    const panic = makeExitClientOrderId('panic', 'trade-123');
+
+    assert.equal(pbtc, makeExitClientOrderId('portfolio-btc', 'trade-123'));
+    assert.notEqual(pbtc, panic);
+    assert.equal(isOwnedAlgoOrder({ clientOrderId: pbtc }), true);
+    assert.ok(pbtc.length <= 36);
+    assert.equal(pbtc, 'qts-ex-pbtc-trade123');
+
+    const longId = makeExitClientOrderId(
+        'portfolio-btc',
+        '62bf63c8-dcc1-4f90-a2ea-123456789012'
+    );
+    assert.ok(longId.length <= 36);
+    assert.equal(longId.startsWith('qts-ex-pbtc-'), true);
+    // Ownership token 20 ký tự phải còn nguyên — slice(0,36) không được cắt
+    assert.equal(longId.endsWith('4f90a2ea123456789012'), true);
+    assert.equal(longId.length, 'qts-ex-pbtc-'.length + 20);
+});
+
 test('selects the correct position side in Hedge Mode', () => {
     const positions = [
         {

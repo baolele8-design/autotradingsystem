@@ -144,7 +144,9 @@ export const TradeValidator = {
   evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol, strategy = '') => {
     const { l1, l2, l3, l5 } = vectorDetails;
     const { score, synergyText, penaltyText, checks, checkScores, passingScore } = systemScore;
-    const requiredRR = autoData.bbwRank > 80 ? 2.0 : 1.8;
+    // B3 (TP1 ~1R): requiredRR hạ 2.0/1.8 → 0.8/0.7 — TP mới ~1R nên
+    // yêu cầu R:R 1.8R sẽ chặn toàn bộ setup hợp lệ.
+    const requiredRR = autoData.bbwRank > 80 ? 0.8 : 0.7;
 
     const recentLossSameDirection = tradeLogs && tradeLogs.some(log => 
         log.symbol === symbol && 

@@ -3,6 +3,9 @@ import {
   encodeLiquidityLedgerEvent,
   withLiquidityFeatureVersion
 } from '../../../domain/analytics/quant/liquidityMetadata.js';
+import {
+  decideExitReasonUpdate
+} from './tradeLedgerExitReason.js';
 
 export async function saveTradeLog(
   context,
@@ -378,14 +381,20 @@ export async function syncBinanceLedger(context, isSilent = false) {
                         status: finalIsolatedPnl > 0 ? 'WIN' : 'LOSS', 
                         pnl_usd: finalIsolatedPnl, 
                         close_price: exitPrice,
-                        exit_reason: preciseExitReason, 
+                        exit_reason: decideExitReasonUpdate(log, preciseExitReason), 
                         close_time: exitTime.toISOString(),
                         pee_analyzed: false,
                         max_favorable_excursion_usd: maxMfeUsd, 
                         max_adverse_excursion_usd: maxMaeUsd,
                         actual_holding_cycles: actualHoldingCycles,
                         metric_version: 'ui-ledger-excursion/v2'
-                    }).eq('id', log.id);
+                    })
+                    // A1-2 RACE CLOSE: chỉ ghi khi row hiện tại exit_reason còn
+                    // NULL hoặc MANUAL_CLOSE. Nếu daemon reconcile đã resolve
+                    // trước đó (ghi reason thật), filter này không match row
+                    // nào → UI không thể ghi đè reason/trạng thái của daemon.
+                    .or('exit_reason.is.null,exit_reason.eq.MANUAL_CLOSE')
+                    .eq('id', log.id);
                     
                     updatedCount++;
 

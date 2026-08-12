@@ -73,7 +73,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'EVENT_REVERSAL',
     priority: 1100,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.2, tpMult: 2.8, holdingCycles: 4, minScore: 62 },
+    profile: { slMult: 1.2, tpMult: 1.38, holdingCycles: 4, minScore: 62 },
     policy: { allowRange: true, allowHighVpin: true }
   }),
   defineStrategy({
@@ -82,7 +82,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'EVENT_REVERSAL',
     priority: 1000,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.1, tpMult: 2.4, holdingCycles: 5, minScore: 60 },
+    profile: { slMult: 1.1, tpMult: 1.27, holdingCycles: 5, minScore: 60 },
     policy: { allowRange: true, allowHighVpin: true }
   }),
   defineStrategy({
@@ -91,7 +91,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'POSITIONING_REVERSAL',
     priority: 900,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.3, tpMult: 3.2, holdingCycles: 6, minScore: 60 },
+    profile: { slMult: 1.3, tpMult: 1.50, holdingCycles: 6, minScore: 60 },
     policy: { allowRange: true }
   }),
   defineStrategy({
@@ -100,7 +100,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'STRUCTURAL_BREAKOUT',
     priority: 800,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.3, tpMult: 3.5, holdingCycles: 5, minScore: 61 },
+    profile: { slMult: 1.3, tpMult: 1.50, holdingCycles: 5, minScore: 61 },
     policy: { allowRange: true }
   }),
   defineStrategy({
@@ -109,7 +109,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'STRUCTURAL_BREAKOUT',
     priority: 700,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.5, tpMult: 3.8, holdingCycles: 4, minScore: 64 },
+    profile: { slMult: 1.5, tpMult: 1.73, holdingCycles: 4, minScore: 64 },
     policy: { allowHighVpin: true }
   }),
   defineStrategy({
@@ -118,7 +118,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'FLOW_REVERSAL',
     priority: 600,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.4, tpMult: 2.6, holdingCycles: 6, minScore: 61 }
+    profile: { slMult: 1.4, tpMult: 1.61, holdingCycles: 6, minScore: 61 }
   }),
   defineStrategy({
     strategyId: 'SMART_MONEY_OI_BUILD',
@@ -126,7 +126,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'POSITION_CONTINUATION',
     priority: 500,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.6, tpMult: 3.4, holdingCycles: 7, minScore: 58 }
+    profile: { slMult: 1.6, tpMult: 1.84, holdingCycles: 7, minScore: 58 }
   }),
   defineStrategy({
     strategyId: 'VALUE_AREA_TREND_PULLBACK',
@@ -134,7 +134,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'TREND_CONTINUATION',
     priority: 400,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.5, tpMult: 3.0, holdingCycles: 8, minScore: 56 }
+    profile: { slMult: 1.5, tpMult: 1.73, holdingCycles: 8, minScore: 56 }
   }),
   defineStrategy({
     strategyId: 'FLOW_REACCELERATION',
@@ -142,7 +142,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'TREND_CONTINUATION',
     priority: 300,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.4, tpMult: 3.2, holdingCycles: 5, minScore: 59 }
+    profile: { slMult: 1.4, tpMult: 1.61, holdingCycles: 5, minScore: 59 }
   }),
   defineStrategy({
     strategyId: 'ALT_CAPITAL_ROTATION',
@@ -150,7 +150,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'MACRO_ROTATION',
     priority: 200,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.6, tpMult: 3.6, holdingCycles: 8, minScore: 60 }
+    profile: { slMult: 1.6, tpMult: 1.84, holdingCycles: 8, minScore: 60 }
   }),
   defineStrategy({
     strategyId: 'VOLATILITY_EXTREME_FADE',
@@ -158,7 +158,7 @@ export const PAPER_STRATEGY_CATALOG = Object.freeze([
     family: 'MEAN_REVERSION',
     priority: 100,
     rolloutMode: ROLLOUT_MODE.LIVE,
-    profile: { slMult: 1.2, tpMult: 2.2, holdingCycles: 4, minScore: 64 },
+    profile: { slMult: 1.2, tpMult: 1.38, holdingCycles: 4, minScore: 64 },
     policy: { allowRange: true }
   })
 ]);
@@ -171,7 +171,7 @@ export const ADAPTIVE_FALLBACK_CATALOG = Object.freeze([
     priority: 0,
     rolloutMode: ROLLOUT_MODE.LIVE,
     supportedDirections: ['LONG'],
-    profile: { slMult: 1.5, tpMult: 3.0, holdingCycles: 8, minScore: 50 }
+    profile: { slMult: 1.5, tpMult: 1.73, holdingCycles: 8, minScore: 50 }
   }),
   defineStrategy({
     strategyId: 'ADAPTIVE_SHORT_FALLBACK',
@@ -180,7 +180,7 @@ export const ADAPTIVE_FALLBACK_CATALOG = Object.freeze([
     priority: 0,
     rolloutMode: ROLLOUT_MODE.LIVE,
     supportedDirections: ['SHORT'],
-    profile: { slMult: 1.5, tpMult: 3.0, holdingCycles: 6, minScore: 50 }
+    profile: { slMult: 1.5, tpMult: 1.73, holdingCycles: 6, minScore: 50 }
   })
 ]);
 

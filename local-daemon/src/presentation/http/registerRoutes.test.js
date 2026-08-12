@@ -277,4 +277,65 @@ test('Binance proxy rejects arbitrary origins and routes public reads via safeFe
     'https://fapi.binance.com/fapi/v1/exchangeInfo'
   );
   assert.equal(valid.headers['x-mbx-used-weight-1m'], '12');
+
+  // TD-005 guard (2026-08-12): useExchangeConfig.js now reads the 24hr ticker
+  // through this proxy — the path must stay allowlisted.
+  const ticker = makeResponse();
+  await handler({
+    query: { path: '/fapi/v1/ticker/24hr', t: 'cache-buster' }
+  }, ticker);
+  assert.equal(ticker.statusCode, 200);
+  assert.equal(
+    safeFetchCalls[1],
+    'https://fapi.binance.com/fapi/v1/ticker/24hr'
+  );
+});
+
+// O10 (team-D 2026-08-12): GET /api/btc-regime surfaces the scanner snapshot.
+test('GET /api/btc-regime returns the scanner regime snapshot', async () => {
+  const handlers = new Map();
+  registerRoutes({
+    app: {
+      get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      post: () => {},
+      delete: () => {}
+    },
+    getBtcRegimeSnapshot: () => ({
+      regime4h: 'Downtrend',
+      regime1d: 'Downtrend',
+      domSlope4h: 0.42,
+      domSlope1d: -0.1,
+      btcDomValue: 58.5,
+      isAltcoinBleeding: true
+    })
+  });
+  const response = {
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return body; }
+  };
+  await handlers.get('GET /api/btc-regime')({}, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.data.regime4h, 'Downtrend');
+  assert.equal(response.body.data.isAltcoinBleeding, true);
+  assert.ok(response.body.timestamp);
+});
+
+test('GET /api/btc-regime fails open when snapshot getter is absent', async () => {
+  const handlers = new Map();
+  registerRoutes({
+    app: {
+      get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      post: () => {},
+      delete: () => {}
+    }
+  });
+  const response = {
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return body; }
+  };
+  await handlers.get('GET /api/btc-regime')({}, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.data, null);
 });

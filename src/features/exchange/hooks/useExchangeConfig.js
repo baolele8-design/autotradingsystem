@@ -16,10 +16,13 @@ export default function useExchangeConfig() {
     const fetchExchangeData = async () => {
       try {
         const ts = Date.now();
-        const exRes = await fetch(`https://fapi.binance.com/fapi/v1/exchangeInfo?t=${ts}`);
+        // TD-005 (2026-08-12): route through the daemon proxy (same-origin
+        // /api -> localhost:1338 via vite proxy locally) instead of direct
+        // Binance fetches; rate-limit contract §7 stays enforced in the daemon.
+        const exRes = await fetch(`/api/binance?path=/fapi/v1/exchangeInfo&t=${ts}`);
         const exData = await exRes.json();
 
-        const tickerRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?t=${ts}`);
+        const tickerRes = await fetch(`/api/binance?path=/fapi/v1/ticker/24hr&t=${ts}`);
         const tickerData = await tickerRes.json();
 
         if (!isMounted || !exData.symbols || !Array.isArray(tickerData)) return;

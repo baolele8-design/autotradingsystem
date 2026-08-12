@@ -77,7 +77,11 @@ export function makeInitialClientAlgoId(kind, tradeId) {
 }
 
 export function makeExitClientOrderId(kind, tradeId) {
-    const normalizedKind = kind === 'temporal' ? 'time' : 'panic';
+    const normalizedKind =
+        kind === 'temporal' ? 'time' :
+        kind === 'portfolio-btc' ? 'pbtc' :
+        kind === 'portfolio-tp' ? 'ptp' :
+        'panic';
     return `${OWNED_ALGO_PREFIX}ex-${normalizedKind}-${makeTradeOwnershipToken(tradeId)}`
         .slice(0, 36);
 }

@@ -14,7 +14,8 @@ export function deriveMathCore({
   dynamicMinNotionals,
   systemScore,
   intervalTime,
-  activeTierClass
+  activeTierClass,
+  btcRegime
 }) {
   const safeResult = {
     appliedRiskPercent: 1.0,
@@ -64,7 +65,14 @@ export function deriveMathCore({
     activeTierClass,
     currentHourUTC,
     tradeSetup.activeStrategyId || tradeSetup.activeStrategy,
-    tradeSetup.tHoldModifier || 1
+    tradeSetup.tHoldModifier || 1,
+    // Wire btcTrendAlignment (report 36, 2026-08-12): counter-BTC trades
+    // get shortened, aligned stay. Frontend regime source is optional —
+    // falls back to null when the vectorRegime payload carries no btcRegime.
+    QuantMath.btcTrendAlignmentFor(
+      tradeSetup.direction,
+      vectorRegime?.btcRegime || null
+    )
   );
   const tHold =
     Number.isFinite(Number(tradeSetup.holdingCycles)) &&
@@ -139,7 +147,14 @@ export function deriveMathCore({
     theoreticalRR = 0;
   }
 
-  const bayesianPrior = 0.45;
+  // O4 (team-D 2026-08-12): Bayesian prior điều kiện theo BTC regime 4h chuẩn
+  // hóa từ local-daemon btcRegimeFrame (Downtrend 0.42 / Uptrend 0.48).
+  // Bán kịch bản nhiễu: 4h Downtrend là nơi tập trung lỗ SHORT Tier 1/2
+  // (report 36: WR 27.3%, -$43.79 trên n=11) → hạ prior khi đi ngược trend.
+  const bayesianPrior =
+    btcRegime === 'Downtrend' ? 0.42
+    : btcRegime === 'Uptrend' ? 0.48
+    : 0.45;
   const effectiveWinRate =
     tradeStats.totalClosed < 30
       ? (bayesianPrior * (30 - tradeStats.totalClosed) +

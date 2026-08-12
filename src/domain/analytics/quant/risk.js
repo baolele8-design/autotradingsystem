@@ -183,7 +183,8 @@ export const dynamicAsymmetricTargets = (
         });
   const profile = selected.profile ||
     getStrategyDefinition(selected.strategyId)?.profile ||
-    { slMult: 1.5, tpMult: 3, holdingCycles: 6, minScore: 50 };
+    // B3 (TP1 ~1R): fallback profile TP 1.73R = round(1.5 × 1.15, 2)
+    { slMult: 1.5, tpMult: 1.73, holdingCycles: 6, minScore: 50 };
   const learnedModelApplied = isLearnedStrategyTierModel(targetModel);
   const optimized = learnedModelApplied
     ? targetModel.dynamic_targets?.optimized
@@ -191,8 +192,20 @@ export const dynamicAsymmetricTargets = (
   const tierModifiers = getStrategyTierTargetModifiers(assetTier);
   const deterministicSlMult = profile.slMult * tierModifiers.sl;
   const deterministicTpMult = profile.tpMult * tierModifiers.tp;
+  // B3 (TP1 ~1R): buffer đối xứng — ATR > 2% cộng +0.2 vào CẢ slMult lẫn
+  // tpMult (trước đây chỉ cộng slMult làm tụt net RR khi ATR cao).
   const volatilityBuffer =
     finiteOr(autoData?.atrPercent, 0) > 2 ? 0.2 : 0;
+  // B3 FIX (2026-08-12): cap tpMult 2.0 phá floor Math.max(tpMult, slMult)
+  // cũ (slMult 3.2 → tpMult 2.0, net RR 0.58). Net RR ≥ 1.0 với cost khứ
+  // hồi ~0.09 ATR (taker: slippage 0.1% + fee 0.04% mỗi chiều tại ATR 3%)
+  // đòi tpMult ≥ slMult + 0.18; dưới tp cap 2.0 chỉ đạt khi slMult ≤ 1.82,
+  // nên SL bị cap chặt hơn policy slMax 3.5 — learned slMult 3.5 vô nghĩa
+  // dưới tp cap 2.0 (gross RR 0.57, cần win-rate > 63.7%). Floor cost-aware
+  // giữ net RR ≥ 1.0 cả khi tpMult không chạm cap.
+  const roundTripCostAtr = 0.09;
+  const slMaxUnderTpCap =
+    STRATEGY_TARGET_LIMITS.tpMult.maximum - 2 * roundTripCostAtr;
 
   // A strategy-tier cell stores final ATR targets for that tier. The live
   // volatility buffer remains a deterministic post-processing step in both
@@ -203,16 +216,18 @@ export const dynamicAsymmetricTargets = (
       ? finiteOr(optimized.slMult, deterministicSlMult)
       : deterministicSlMult
   ) + volatilityBuffer;
-  let tpMult = optimized
-    ? finiteOr(optimized.tpMult, deterministicTpMult)
-    : deterministicTpMult;
+  let tpMult = (
+    optimized
+      ? finiteOr(optimized.tpMult, deterministicTpMult)
+      : deterministicTpMult
+  ) + volatilityBuffer;
   slMult = clamp(
     slMult,
     STRATEGY_TARGET_LIMITS.slMult.minimum,
-    STRATEGY_TARGET_LIMITS.slMult.maximum
+    slMaxUnderTpCap
   );
   tpMult = clamp(
-    Math.max(tpMult, slMult * 1.5),
+    Math.max(tpMult, slMult + 2 * roundTripCostAtr),
     STRATEGY_TARGET_LIMITS.tpMult.minimum,
     STRATEGY_TARGET_LIMITS.tpMult.maximum
   );
@@ -364,11 +379,13 @@ export const calculateTemporalBarrier = (
     STRATEGY_TARGET_LIMITS.tHoldModifier.maximum
   );
 
-  // BTC trend modifier for altcoins:
-  // Counter-BTC trades get shortened, aligned trades get extended.
+  // BTC trend modifier for altcoins (decision 2026-08-12, report 36):
+  // ONLY the downside branch is active — counter-BTC trades get shortened.
+  // Aligned trades are NOT extended: holding longer while BTC may reverse
+  // (regime lags one beat) was rejected by the devil's-advocate review.
   let btcModifier = 1;
   if (btcTrendAlignment === false) btcModifier = 0.85;
-  else if (btcTrendAlignment === true) btcModifier = 1.10;
+  else if (btcTrendAlignment === true) btcModifier = 1;
 
   const maxHoldingCycles = Math.round(
     baseCycles *
@@ -379,4 +396,21 @@ export const calculateTemporalBarrier = (
     btcModifier
   );
   return clamp(maxHoldingCycles, 2, 16);
+};
+
+// Map (direction, BTC regime label) -> btcTrendAlignment consumed by
+// calculateTemporalBarrier. Returns null when the regime label carries no
+// directional signal (range/unknown), so holding cycles stay unchanged.
+export const btcTrendAlignmentFor = (direction, btcRegime) => {
+  const dir = String(direction || '').toUpperCase();
+  const regime = String(btcRegime || '').toLowerCase();
+  if (!dir || !regime) return null;
+  const bullish = /up|bull/.test(regime);
+  const bearish = /down|bear/.test(regime);
+  if (!bullish && !bearish) return null;
+  const longAligned = dir === 'LONG' && bullish;
+  const shortAligned = dir === 'SHORT' && bearish;
+  if (longAligned || shortAligned) return true;
+  if (dir === 'LONG' || dir === 'SHORT') return false;
+  return null;
 };

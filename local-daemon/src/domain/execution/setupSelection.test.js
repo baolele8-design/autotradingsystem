@@ -126,3 +126,49 @@ test('caps the number of setups per strategy by maxOpenPerStrategy', () => {
     [100, 99]
   );
 });
+
+test('blocks SHORT Tier 2 alt in BTC downtrend and reports avoidable loss', () => {
+  const blocked = live({
+    symbol: 'ETHUSDT',
+    direction: 'SHORT',
+    assetTier: 'Tier 2: Liquid Majors',
+    btcRegime: 'Downtrend',
+    score: 99
+  });
+  const allowed = live({ symbol: 'BTCUSDT', score: 70 });
+
+  const result = selectExecutableSetups([blocked, allowed], {
+    allowedIntervals: ['15m'],
+    minScore: 50,
+    now: 1_000_000
+  });
+
+  assert.deepEqual(result.validSetups.map(setup => setup.symbol), ['BTCUSDT']);
+  assert.equal(result.filterStats.btcRegimeBlocked, 1);
+  assert.equal(result.btcGateBlocked.length, 1);
+  assert.equal(result.btcGateBlocked[0].symbol, 'ETHUSDT');
+  assert.ok(result.btcGateBlocked[0].estimatedAvgR < 0);
+});
+
+test('LONG in BTC downtrend and SHORT in uptrend both pass the gate', () => {
+  const result = selectExecutableSetups(
+    [
+      live({ symbol: 'ETHUSDT', direction: 'LONG', btcRegime: 'Downtrend' }),
+      live({ symbol: 'SOLUSDT', direction: 'SHORT', btcRegime: 'Uptrend' })
+    ],
+    { allowedIntervals: ['15m'], minScore: 50, now: 1_000_000 }
+  );
+
+  assert.equal(result.filterStats.btcRegimeBlocked, 0);
+  assert.equal(result.validSetups.length, 2);
+});
+
+test('unknown BTC regime passes the gate with a warn flag', () => {
+  const result = selectExecutableSetups(
+    [live({ symbol: 'ETHUSDT', direction: 'SHORT', btcRegime: null })],
+    { allowedIntervals: ['15m'], minScore: 50, now: 1_000_000 }
+  );
+
+  assert.equal(result.filterStats.btcRegimeBlocked, 0);
+  assert.equal(result.validSetups.length, 1);
+});

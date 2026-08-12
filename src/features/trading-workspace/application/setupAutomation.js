@@ -124,7 +124,9 @@ export function injectScannedSetup(context, setup) {
         strategyFamily: setup.strategyFamily || 'ADAPTIVE',
         strategyRolloutMode: setup.rolloutMode || setup.executionMode || 'LIVE',
         tHoldModifier: setup.tHoldModifier || 1,
-        holdingCycles: setup.tHold
+        holdingCycles: setup.tHold,
+        // O4: BTC regime 4h/1d chuẩn từ daemon (btcRegimeFrame) — prior sizing phụ thuộc.
+        btcRegime: setup.btc_regime_at_entry || prev.btcRegime || null
     }));
     showToast(`🚀 Đã nạp cấu trúc ${setup.symbol} [${setup.interval}] lên tổng đài chỉ huy!`);
   };

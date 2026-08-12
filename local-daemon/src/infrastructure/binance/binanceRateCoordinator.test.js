@@ -199,6 +199,16 @@ test('estimates conservative endpoint and order costs', () => {
     endpoint: '/fapi/v1/commissionRate',
     params: { symbol: 'BTCUSDT' }
   }), { orderCount: 0, requestWeight: 20 });
+  // TD-005 guard (2026-08-12): useExchangeConfig.js reads both public endpoints
+  // via the daemon proxy — weights must stay explicit per the rate contract (§7).
+  assert.deepEqual(estimateBinanceRateCost({
+    endpoint: '/fapi/v1/ticker/24hr',
+    params: {}
+  }), { orderCount: 0, requestWeight: 40 });
+  assert.deepEqual(estimateBinanceRateCost({
+    endpoint: '/fapi/v1/exchangeInfo',
+    params: {}
+  }), { orderCount: 0, requestWeight: 1 });
   assert.deepEqual(estimateBinanceRateCost({
     endpoint: '/fapi/v1/positionSide/dual'
   }), { orderCount: 0, requestWeight: 30 });

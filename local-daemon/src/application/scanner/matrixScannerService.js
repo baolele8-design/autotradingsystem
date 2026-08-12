@@ -1,5 +1,10 @@
 import QuantMath from '../../../../src/domain/analytics/QuantMath.js';
 import {
+  BTC_REGIME_FRAMES,
+  resolveBtcRegime,
+  buildBtcRegimeSnapshot
+} from '../../domain/execution/btcRegimeFrame.js';
+import {
   LIQUIDATION_PRESSURE_UNIT,
   LIQUIDITY_FEATURE_SCHEMA_VERSION,
   createLiquidityFeatureMetadata,
@@ -235,7 +240,13 @@ export function createMatrixScannerService(context) {
     safeFetch,
     sendBinanceReq,
     supabase
-  } = context;
+} = context;
+
+  // O1/O10 (team-D 2026-08-12): regime + dominance caches live at service
+  // closure level so the HTTP snapshot endpoint can read them between scans.
+  const btcDomCache = new Map();
+  const btcRegimeCache = new Map();
+  let lastBtcDomValue = null;
 
   async function runMatrixScanner() {
       console.log(`[RADAR] Bắt đầu chu kỳ quét Đa Khung Thời Gian (100% Dữ liệu thực)...`);
@@ -244,6 +255,11 @@ export function createMatrixScannerService(context) {
       // R2 (2026-08-10): reset mỗi cycle — accumulate near-miss của candidates
       // không match; log 1 dòng tổng hợp cuối cycle (chống spam per-candidate).
       const nearMissStats = new Map();
+
+      // O10: closure caches are per-cycle, snapshot getter reads latest cycle.
+      btcDomCache.clear();
+      btcRegimeCache.clear();
+      lastBtcDomValue = null;
   
       try {
           // [VÁ LỖI 1]: Chỉ lấy các lệnh trong 12h qua để check Gate Cooldown chính xác nhất, tránh bị trôi dữ liệu khi limit(200)
@@ -347,7 +363,10 @@ export function createMatrixScannerService(context) {
           const activeMakerFee = tradeFeesRes ? parseFloat(tradeFeesRes.makerCommissionRate) : 0.0002;
           const activeTakerFee = tradeFeesRes ? parseFloat(tradeFeesRes.takerCommissionRate) : 0.0004;
   
-          const btcDomValue = cmcData?.btcDominance || 55.0;
+          const rawBtcDomValue = cmcData?.btcDominance ?? null;
+          // O10: record raw (pre-fallback) value for the snapshot endpoint.
+          if (rawBtcDomValue !== null) lastBtcDomValue = rawBtcDomValue;
+          const btcDomValue = rawBtcDomValue ?? 55.0;
           const fgiValue = cmcData?.fgiValue || 50;
           
           const now = new Date();
@@ -358,10 +377,8 @@ export function createMatrixScannerService(context) {
           if (utcHour >= 13 && utcHour < 21) { tradingSession = 'NEW_YORK'; sessionMultiplier = 1.5; }
           if (day === 0 || day === 6) sessionMultiplier *= 0.5;
   
-          const targetIntervals = TARGET_INTERVALS;
-         
-          const btcDomCache = new Map();
-          const btcRegimeCache = new Map();
+const targetIntervals = TARGET_INTERVALS;
+
           const requiredMtfIntervals = ['15m', '1h', '4h', '1d', '1w'];
           
           await Promise.all(requiredMtfIntervals.map(async (mtf) => {
@@ -379,8 +396,11 @@ export function createMatrixScannerService(context) {
                 }
           }));
   
-          btcReturnsCache.clear();
-          for (const interval of targetIntervals) {
+btcReturnsCache.clear();
+          // O1 (team-D 2026-08-12): regime cache only tracks the FIXED
+          // 4h/1d frames — never the trade's own interval. Returns stays
+          // per-interval (used by ISI at the per-symbol scan).
+          for (const interval of BTC_REGIME_FRAMES) {
                const btcKlines = await marketDataCache.getKlines('BTCUSDT', interval, 250);
                let returns = [];
                if (btcKlines && btcKlines.length > 1) {
@@ -829,9 +849,9 @@ export function createMatrixScannerService(context) {
                                           funding_slope: parseFloat(fundingSlopeValue || 0),
                                           taker_ratio: parseFloat(apiMacro.takerBuySellRatio || 1),
                                           btc_dom_slope: parseFloat(autoData.btcDomSlope || 0),
-                                          regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
+regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                           btc_regime_at_entry:
-                                              btcRegimeCache.get(interval) || null,
+                                              resolveBtcRegime(btcRegimeCache, interval),
                                           vpin: parseFloat(autoData.vpinValue || 0),
                                           obi: parseFloat(dynamicObi || 0.5),
                                           amihud: parseFloat(amihudValue || 0),
@@ -1054,7 +1074,15 @@ export function createMatrixScannerService(context) {
                                   assetTier,
                                   utcHour,
                                   targetInfo,
-                                  targetInfo.tHoldModifier
+                                  targetInfo.tHoldModifier,
+                                  // Wire btcTrendAlignment (report 36, 2026-08-12):
+                                  // counter-BTC trades get shortened, aligned stay.
+                                  // O1 (team-D 2026-08-12): regime from fixed 4h/1d
+                                  // frames, never the trade interval.
+                                  QuantMath.btcTrendAlignmentFor(
+                                      direction,
+                                      resolveBtcRegime(btcRegimeCache, interval)
+                                  )
                               );
   
                               const minSafeAtr = 0.005; 
@@ -1169,8 +1197,8 @@ export function createMatrixScannerService(context) {
                                       strategyDisplayName,
                                       strategyFamily: targetInfo.family,
                                       strategyVersion: targetInfo.strategyVersion,
-                                      btcRegime:
-                                          btcRegimeCache.get(interval) || null,
+btcRegime:
+                                          resolveBtcRegime(btcRegimeCache, interval),
                                       rolloutMode: targetInfo.rolloutMode,
                                       executionMode: targetInfo.executionMode,
                                       strategyPriority: routedStrategy.priority,
@@ -1344,8 +1372,15 @@ export function createMatrixScannerService(context) {
       setTimeout(matrixScannerLoop, 60000); // Chỉ bắt đầu đếm 60s SAU KHI đã quét xong hoàn toàn
   }
 
-  return {
+return {
     matrixScannerLoop,
-    runMatrixScanner
+    runMatrixScanner,
+    // O10: read-only snapshot of the latest scan cycle's BTC regime state
+    // (fixed 4h/1d frames per O1), read by GET /api/btc-regime.
+    getBtcRegimeSnapshot: () => buildBtcRegimeSnapshot({
+      regimeCache: btcRegimeCache,
+      domCache: btcDomCache,
+      btcDominance: lastBtcDomValue
+    })
   };
 }

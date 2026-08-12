@@ -20,8 +20,18 @@ import {
 } from '../../domain/orders/trailingOrders.js';
 import {
   computeGreenTotal,
+  isEngineOwnedPosition,
   shouldTriggerPortfolioTp
 } from '../../domain/execution/portfolioTakeProfit.js';
+import {
+  BTC_BREAK_BURST_LIMIT,
+  BTC_BREAK_LOOKBACK_N,
+  EXIT_REASON_BTC_BREAK,
+  computeBtcBreakCapStop,
+  createBtcBreakCooldown,
+  evaluateBtcBreak,
+  selectBtcBreakSymbols
+} from '../../domain/execution/btcBreakProtection.js';
 
 const INTERVAL_MS = {
   '5m': 300000,
@@ -35,6 +45,7 @@ export function createProtectionService(context) {
   const {
     getCurrentAiModel = () => null,
     markPriceCache,
+    marketDataCache = null,
     observeOpenTrades = () => {},
     readBinanceReq,
     safeFetch,
@@ -45,6 +56,7 @@ export function createProtectionService(context) {
   const exchangePriceFilters = new Map();
   const symbolOrderLocks = new Set();
   const crossedTargetLoggedAt = new Map();
+  const btcBreakCooldown = createBtcBreakCooldown();
   let exchangePriceFiltersLoadedAt = 0;
 
   async function withSymbolOrderLock(symbol, operation) {
@@ -165,6 +177,48 @@ export function createProtectionService(context) {
           .eq('id', tradeId);
       if (error) throw new Error(`Supabase update failed: ${error.message}`);
   }
+
+  // MARKET close + hủy SL/TP conditional orders còn treo của lệnh.
+  async function closePositionAndCleanup({ position, trade, side, newClientOrderId }) {
+      const closeQty = Math.abs(Number.parseFloat(position.positionAmt));
+      await sendBinanceReq(
+          'POST',
+          '/fapi/v1/order',
+          makePositionReductionPayload(position, {
+              symbol: trade.symbol,
+              side,
+              type: 'MARKET',
+              quantity: closeQty,
+              newClientOrderId
+          })
+      );
+      try {
+          const remainingOrders =
+              await readSymbolOpenOrders(trade.symbol);
+          if (remainingOrders) {
+              for (const order of remainingOrders) {
+                  if (
+                      isOwnedAlgoOrder(order) &&
+                      (
+                          isStopLossOrder(order) ||
+                          isTakeProfitOrder(order)
+                      )
+                  ) {
+                      await cancelExactOrder(
+                          trade.symbol,
+                          order
+                      );
+                  }
+              }
+          }
+      } catch (cleanupError) {
+          console.error(
+              `[PORTFOLIO TP CLEANUP] ${trade.symbol}:`,
+              cleanupError.response?.data?.msg ||
+              cleanupError.message
+          );
+      }
+  }
   
   async function runSmartTrailingEngine() {
       try {
@@ -212,52 +266,15 @@ export function createProtectionService(context) {
                   try {
                       const mutationResult = await withSymbolOrderLock(
                           candidate.symbol,
-                          async () => {
-                              const closeSide = trade.direction === 'LONG' ? 'SELL' : 'BUY';
-                              const closeQty = Math.abs(
-                                  Number.parseFloat(position.positionAmt)
-                              );
-                              await sendBinanceReq(
-                                  'POST',
-                                  '/fapi/v1/order',
-                                  makePositionReductionPayload(position, {
-                                      symbol: candidate.symbol,
-                                      side: closeSide,
-                                      type: 'MARKET',
-                                      quantity: closeQty,
-                                      newClientOrderId: makeExitClientOrderId(
-                                          'portfolio-tp',
-                                          trade.id
-                                      )
-                                  })
-                              );
-                              try {
-                                  const remainingOrders =
-                                      await readSymbolOpenOrders(candidate.symbol);
-                                  if (remainingOrders) {
-                                      for (const order of remainingOrders) {
-                                          if (
-                                              isOwnedAlgoOrder(order) &&
-                                              (
-                                                  isStopLossOrder(order) ||
-                                                  isTakeProfitOrder(order)
-                                              )
-                                          ) {
-                                              await cancelExactOrder(
-                                                  candidate.symbol,
-                                                  order
-                                              );
-                                          }
-                                      }
-                                  }
-                              } catch (cleanupError) {
-                                  console.error(
-                                      `[PORTFOLIO TP CLEANUP] ${candidate.symbol}:`,
-                                      cleanupError.response?.data?.msg ||
-                                      cleanupError.message
-                                  );
-                              }
-                          }
+                          () => closePositionAndCleanup({
+                              position,
+                              trade,
+                              side: trade.direction === 'LONG' ? 'SELL' : 'BUY',
+                              newClientOrderId: makeExitClientOrderId(
+                                  'portfolio-tp',
+                                  trade.id
+                              )
+                          })
                       );
                       if (mutationResult?.skipped) {
                           console.log(
@@ -284,6 +301,390 @@ export function createProtectionService(context) {
                           error.response?.data?.msg || error.message
                       );
                   }
+              }
+          }
+
+          // F-D3: vị thế ĐỎ engine-owned (unrealizedProfit <= 0) — nhánh cap SL.
+          const redCandidates = positionsRes.filter(position =>
+              isEngineOwnedPosition(position, queriedTrades) &&
+              Number.parseFloat(position.unrealizedProfit) <= 0
+          );
+
+          // =====================================================================
+          // 🚨 BTC BREAK PROTECTION (A2/A1 + F-D3): BTC đảo chiều phá
+          // support/resistance 5m → đóng green positions cùng chiều rủi ro
+          // (LONG khi phá support, SHORT khi phá resistance) VÀ cap SL lệnh
+          // đỏ cùng chiều rủi ro về 1R (không đóng). One-shot 4h global;
+          // LIVE — thao tác lệnh thật khi break xác nhận (owner directive
+          // 2026-08-12, bỏ shadow). Fail-closed: thiếu marketDataCache /
+          // klines lỗi / stale → không đụng gì.
+          // =====================================================================
+          if (
+              marketDataCache &&
+              (candidates.length > 0 || redCandidates.length > 0) &&
+              btcBreakCooldown.canTrigger()
+          ) {
+              try {
+                  const btcKlines = await marketDataCache.getKlines(
+                      'BTCUSDT',
+                      '5m',
+                      BTC_BREAK_LOOKBACK_N + 5
+                  );
+                  const btcBreak = evaluateBtcBreak({ klines: btcKlines });
+                  if (btcBreak.kind) {
+                      const breakSymbols = selectBtcBreakSymbols(
+                          candidates,
+                          queriedTrades,
+                          btcBreak.kind
+                      );
+                      const closeable = breakSymbols
+                          .map(candidate => ({
+                              candidate,
+                              trade: queriedTrades.find(t =>
+                                  t.symbol === candidate.symbol &&
+                                  t.status === 'OPEN'
+                              )
+                          }))
+                          .filter(({ trade }) =>
+                              trade && !portfolioClosedTradeIds.has(trade.id)
+                          )
+                          .slice(0, BTC_BREAK_BURST_LIMIT);
+
+                      for (const { candidate, trade } of closeable) {
+                          const position = positionsRes.find(
+                              p => p.symbol === candidate.symbol
+                          );
+                          if (!position || !trade) continue;
+                          try {
+                              const mutationResult = await withSymbolOrderLock(
+                                  candidate.symbol,
+                                  () => closePositionAndCleanup({
+                                      position,
+                                      trade,
+                                      side: trade.direction === 'LONG' ? 'SELL' : 'BUY',
+                                      newClientOrderId: makeExitClientOrderId(
+                                          'portfolio-btc',
+                                          trade.id
+                                      )
+                                  })
+                              );
+                              if (mutationResult?.skipped) {
+                                  console.log(
+                                      `[BTC BREAK SKIP] ${candidate.symbol} đang có mutation khác; thử lại vòng sau.`
+                                  );
+                                  continue;
+                              }
+
+                              await persistTrailingState(trade.id, {
+                                  status: 'CLOSED',
+                                  close_price:
+                                      markPriceCache.get(candidate.symbol)?.price ??
+                                      position.markPrice,
+                                  exit_reason: EXIT_REASON_BTC_BREAK
+                              });
+                              portfolioClosedTradeIds.add(trade.id);
+                              console.log(
+                                  `🚨 [BTC BREAK] Đã chốt ${candidate.symbol} ` +
+                                  `do ${btcBreak.kind} (${btcBreak.kind === 'SUPPORT_BREAK' ? 'LONG' : 'SHORT'} rủi ro).`
+                              );
+                          } catch (error) {
+                              console.error(
+                                  `❌ [BTC BREAK] Không chốt được ${candidate.symbol}:`,
+                                  error.response?.data?.msg || error.message
+                              );
+                          }
+                      }
+
+                      // F-D3 red-cap loop: vị thế ĐỎ cùng chiều rủi ro → cap SL
+                      // về 1R (KHÔNG đóng; không đụng protection_stage /
+                      // high_water_price / trailing_activated / exit_reason /
+                      // status). Create+verify trước, delete sau — mirror
+                      // trailing pattern. Fail-closed từng bước: mark không
+                      // fresh, cap không tính được, thiếu filter, tick lỗi,
+                      // monotonic, inadmissible, foreign stop → skip.
+                      const wantedDirection =
+                          btcBreak.kind === 'SUPPORT_BREAK'
+                              ? 'LONG'
+                              : btcBreak.kind === 'RESISTANCE_BREAK'
+                                  ? 'SHORT'
+                                  : null;
+                      const capableRed = selectBtcBreakSymbols(
+                          redCandidates,
+                          queriedTrades,
+                          btcBreak.kind
+                      ).slice(0, BTC_BREAK_BURST_LIMIT);
+
+                      for (const candidate of capableRed) {
+                          // candidate chính là position object (từ
+                          // redCandidates = positionsRes.filter) — không
+                          // re-find theo symbol để tránh nhầm position khác
+                          // chiều trong hedge mode.
+                          const position = candidate;
+                          const positionDirection =
+                              Number.parseFloat(position.positionAmt) > 0
+                                  ? 'LONG'
+                                  : 'SHORT';
+                          if (positionDirection !== wantedDirection) continue;
+                          const trade = queriedTrades.find(t =>
+                              t.symbol === candidate.symbol &&
+                              t.status === 'OPEN' &&
+                              String(t.direction || '').toUpperCase() ===
+                                  positionDirection
+                          );
+                          if (!trade) continue;
+                          if (portfolioClosedTradeIds.has(trade.id)) continue;
+
+                          const entryPrice = Number.parseFloat(trade.entry);
+                          const currentSl = Number.parseFloat(trade.sl);
+                          const initialRiskPerCoin =
+                              Number.parseFloat(trade.initial_risk_per_coin);
+                          if (
+                              !Number.isFinite(entryPrice) || entryPrice <= 0 ||
+                              !Number.isFinite(currentSl) || currentSl <= 0 ||
+                              !Number.isFinite(initialRiskPerCoin) ||
+                              initialRiskPerCoin <= 0
+                          ) {
+                              console.error(
+                                  `[BTC BREAK CAP SKIP] ${trade.symbol}: entry/sl/initial_risk_per_coin không hợp lệ.`
+                              );
+                              continue;
+                          }
+
+                          const cachedMark = markPriceCache.get(trade.symbol);
+                          const hasFreshStreamPrice =
+                              cachedMark &&
+                              Date.now() - cachedMark.updatedAt <= 5000;
+                          if (!hasFreshStreamPrice) {
+                              console.warn(
+                                  `[BTC BREAK CAP SKIP] ${trade.symbol}: markPriceCache không fresh; bỏ qua cap (không fallback position.markPrice).`
+                              );
+                              continue;
+                          }
+                          const markPrice = cachedMark.price;
+
+                          const capSl = computeBtcBreakCapStop({
+                              entry: entryPrice,
+                              initialRiskPerCoin,
+                              direction: trade.direction
+                          });
+                          if (capSl === null) continue;
+
+                          const priceFilter = exchangePriceFilters.get(trade.symbol);
+                          if (!priceFilter) {
+                              console.error(
+                                  `[BTC BREAK CAP FAIL-CLOSED] Thiếu PRICE_FILTER cho ${trade.symbol}.`
+                              );
+                              continue;
+                          }
+
+                          const isLong = trade.direction === 'LONG';
+                          let quantized;
+                          try {
+                              quantized = quantizeStopPrice(
+                                  capSl,
+                                  priceFilter,
+                                  isLong
+                              );
+                          } catch (error) {
+                              console.error(
+                                  `[BTC BREAK CAP TICK] ${trade.symbol}:`,
+                                  error.message
+                              );
+                              continue;
+                          }
+
+                          if (!isStrictlyBetterStop(
+                              quantized.numericPrice,
+                              currentSl,
+                              quantized.tickSize,
+                              isLong
+                          )) {
+                              continue;
+                          }
+
+                          if (!isStopTriggerAdmissible(
+                              quantized.numericPrice,
+                              markPrice,
+                              quantized.tickSize,
+                              isLong
+                          )) {
+                              console.warn(
+                                  `[BTC BREAK CAP SKIP] ${trade.symbol}: mark ${markPrice} ` +
+                                  `đã vượt cap ${quantized.formattedPrice}; giữ nguyên SL ${currentSl}.`
+                              );
+                              continue;
+                          }
+
+                          const exitSide = isLong ? 'SELL' : 'BUY';
+                          try {
+                              const mutationResult = await withSymbolOrderLock(
+                                  trade.symbol,
+                                  async () => {
+                                      const freshOrders =
+                                          await readSymbolOpenOrders(trade.symbol);
+                                      if (!freshOrders) {
+                                          throw new Error(
+                                              'Không xác minh được order state trước replace.'
+                                          );
+                                      }
+
+                                      const exactStopOrders = freshOrders.filter(order =>
+                                          order.symbol === trade.symbol &&
+                                          order.side === exitSide &&
+                                          isStopLossOrder(order)
+                                      );
+                                      const replaceableStops =
+                                          selectReplaceableStopOrders({
+                                              orders: freshOrders,
+                                              symbol: trade.symbol,
+                                              exitSide,
+                                              currentDbSl: currentSl,
+                                              tickSize: quantized.tickSize,
+                                              storedSlAlgoId: trade.sl_algo_id
+                                          });
+
+                                      const foreignStops = exactStopOrders.filter(
+                                          order => !replaceableStops.includes(order)
+                                      );
+                                      if (foreignStops.length > 0) {
+                                          return { skipped: 'foreign' };
+                                      }
+
+                                      const existingReplacement =
+                                          replaceableStops.find(order =>
+                                              isOwnedAlgoOrder(order) &&
+                                              isSameTriggerPrice(
+                                                  order,
+                                                  quantized.numericPrice,
+                                                  quantized.tickSize
+                                              )
+                                          );
+
+                                      const replacement = await replaceStopSafely({
+                                          existingStops: replaceableStops,
+                                          existingReplacement,
+                                          createAndVerify: async () => {
+                                              const clientAlgoId =
+                                                  makeClientAlgoId(trade.id);
+                                              const newOrderPayload =
+                                                  makePositionReductionPayload(
+                                                      position,
+                                                      {
+                                                          symbol: trade.symbol,
+                                                          side: exitSide,
+                                                          type: 'STOP_MARKET',
+                                                          triggerPrice:
+                                                              quantized.formattedPrice,
+                                                          quantity: Math.abs(
+                                                              Number.parseFloat(
+                                                                  position.positionAmt
+                                                              )
+                                                          ),
+                                                          workingType: 'MARK_PRICE',
+                                                          priceProtect: 'true',
+                                                          algoType: 'CONDITIONAL',
+                                                          clientAlgoId
+                                                      }
+                                                  );
+
+                                              let createdData = null;
+                                              let creationError = null;
+                                              try {
+                                                  const created =
+                                                      await sendBinanceReq(
+                                                          'POST',
+                                                          '/fapi/v1/algoOrder',
+                                                          newOrderPayload
+                                                      );
+                                                  createdData = created.data;
+                                              } catch (error) {
+                                                  // Timeout/5xx có thể xảy ra
+                                                  // khi lệnh đã được nhận; xác
+                                                  // minh bằng clientAlgoId
+                                                  // trước khi kết luận thất bại.
+                                                  creationError = error;
+                                              }
+
+                                              const verified =
+                                                  await verifyAlgoOrder(
+                                                      trade.symbol,
+                                                      createdData,
+                                                      clientAlgoId
+                                                  );
+                                              if (!verified && creationError) {
+                                                  throw creationError;
+                                              }
+                                              return verified;
+                                          },
+                                          isSameOrder: (oldStop, replacement) =>
+                                              replacement.algoId !== undefined &&
+                                              String(oldStop.algoId) ===
+                                                  String(replacement.algoId),
+                                          cancelOld: async oldStop => {
+                                              try {
+                                                  await cancelExactOrder(
+                                                      trade.symbol,
+                                                      oldStop
+                                                  );
+                                              } catch (error) {
+                                                  console.error(
+                                                      `[BTC BREAK CAP DUPLICATE] Không xóa được SL cũ ${trade.symbol}:`,
+                                                      error.response?.data?.msg ||
+                                                      error.message
+                                                  );
+                                              }
+                                          }
+                                      });
+                                      return {
+                                          skipped: false,
+                                          slAlgoId: replacement.algoId ?? null
+                                      };
+                                  }
+                              );
+
+                              if (mutationResult?.skipped) {
+                                  if (mutationResult.skipped === 'foreign') {
+                                      console.log(
+                                          `[BTC BREAK CAP SKIP] ${trade.symbol}: SL ngoài engine; không hủy lệnh đặt tay.`
+                                      );
+                                  } else {
+                                      console.log(
+                                          `[BTC BREAK CAP LOCK] ${trade.symbol} đang có mutation khác; thử lại vòng sau.`
+                                      );
+                                  }
+                                  continue;
+                              }
+
+                              const nextSlAlgoId =
+                                  mutationResult?.slAlgoId ?? trade.sl_algo_id;
+                              if (!mutationResult?.slAlgoId) {
+                                  console.error(
+                                      `[BTC BREAK CAP PERSIST] ${trade.symbol}: không xác minh được slAlgoId; giữ sl_algo_id cũ.`
+                                  );
+                              }
+                              await persistTrailingState(trade.id, {
+                                  sl: quantized.numericPrice,
+                                  sl_algo_id: nextSlAlgoId
+                              });
+                              console.log(
+                                  `[BTC BREAK CAP] ${trade.symbol}: ` +
+                                  `${currentSl} -> ${quantized.formattedPrice} ` +
+                                  `(${btcBreak.kind}, cap 1R)`
+                              );
+                          } catch (error) {
+                              console.error(
+                                  `❌ [BTC BREAK CAP] Không cap SL ${trade.symbol}:`,
+                                  error.response?.data?.msg || error.message
+                              );
+                          }
+                      }
+                      btcBreakCooldown.recordTrigger();
+                  }
+              } catch (error) {
+                  console.error(
+                      '[BTC BREAK FAIL-CLOSED] Không đánh giá được break:',
+                      error.response?.data?.msg || error.message
+                  );
               }
           }
 

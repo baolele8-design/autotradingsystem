@@ -261,6 +261,17 @@ test('F4: h2_realized là informational — isApproved và h2.passed không đ�
   assert.equal(gate(withLogs, 'h2').h2_realized, 0.5);
 });
 
+// B3 (TP1 ~1R): requiredRR hạ từ 1.8 → 0.7 (bbwRank ≤ 80). Một setup RR 0.75
+// với EV −0.06 (< −0.05, cửa EV đóng) phải PASS h2 nhờ cửa RR mới.
+// Lưu ý: spec đề xuất EV −0.02, nhưng −0.02 > −0.05 đã pass từ trước (không
+// RED được); dùng −0.06 để chứng minh đúng cửa RR là thứ cứu gate.
+test('B3: theoreticalRR 0.75 + EV −0.06 → h2 PASS nhờ requiredRR 0.7', () => {
+  const result = evaluateFixture({
+    mathCore: { theoreticalRR: 0.75, trueEVValue: -0.06 }
+  });
+  assert.equal(gate(result, 'h2').passed, true);
+});
+
 // F5 (P7): soft gates chỉ còn telemetry hữu ích — s1 (93% true), s4 (90% true)
 // không loại được gì; s3 (2% true) chặn nhầm; s5 nghịch hướng. Bỏ khỏi DANH SÁCH
 // hiển thị, giữ checkS1..S5/checkScores vì vẫn đóng góp score.

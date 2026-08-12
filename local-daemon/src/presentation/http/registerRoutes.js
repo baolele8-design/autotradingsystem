@@ -118,9 +118,10 @@ export function registerRoutes(context) {
     readSpotBinanceReq,
     safeFetch,
     sendBinanceReq,
-    sendSpotBinanceReq,
+sendSpotBinanceReq,
     setGlobalMvrvZScore,
-    withSymbolOrderLock
+    withSymbolOrderLock,
+    getBtcRegimeSnapshot
   } = context;
 
   app.post('/api/mvrv', (req, res) => {
@@ -146,6 +147,19 @@ export function registerRoutes(context) {
   app.get('/api/system-health', (_req, res) => {
     res.status(200).json({
       binance: getRateLimitState()
+    });
+  });
+
+  app.get('/api/btc-regime', (_req, res) => {
+    // O10 (team-D 2026-08-12): expose fixed 4h/1d BTC regime state read
+    // from the latest scanner cycle (see matrixScannerService getter).
+    const snapshot = typeof getBtcRegimeSnapshot === 'function'
+      ? getBtcRegimeSnapshot()
+      : null;
+    res.status(200).json({
+      success: true,
+      data: snapshot,
+      timestamp: new Date().toISOString()
     });
   });
 

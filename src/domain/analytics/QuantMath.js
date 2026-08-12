@@ -46,7 +46,8 @@ const QuantMath = {
   pearsonCorrelation: statistics.pearsonCorrelation,
   immediateSensitivityIndicator: microstructure.immediateSensitivityIndicator,
   detectMarketStructure: indicators.detectMarketStructure,
-  calculateTemporalBarrier: risk.calculateTemporalBarrier
+  calculateTemporalBarrier: risk.calculateTemporalBarrier,
+  btcTrendAlignmentFor: risk.btcTrendAlignmentFor
 };
 
 export default QuantMath;

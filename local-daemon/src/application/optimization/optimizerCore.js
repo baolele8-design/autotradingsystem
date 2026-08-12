@@ -44,14 +44,15 @@ export const DETERMINISTIC_GATE_WEIGHTS = Object.freeze({
 
 export const DETERMINISTIC_TARGETS = Object.freeze({
   slMult: 1.5,
-  tpMult: 3.0,
+  // B3 (TP1 ~1R): deterministic TP ~1R (round(1.5 × 1.15, 2) = 1.73)
+  tpMult: 1.73,
   tHold_modifier: 1.0
 });
 
 export const DETERMINISTIC_MIN_SCORE = 50;
 
 const BLOCKED_EXIT_REASON_PATTERN =
-  /MANUAL|PANIC|UNRESOLVED|UNKNOWN|FORCE_SYNC/i;
+  /MANUAL|PANIC|UNRESOLVED|UNKNOWN|UNCLASSIFIED|FORCE_SYNC/i;
 
 const PROFIT_EXIT_REASON_PATTERN = /TAKE_PROFIT|TP_|PROFIT/i;
 const LOSS_EXIT_REASON_PATTERN = /STOP_LOSS|SL_|LOSS/i;
@@ -660,7 +661,9 @@ const calculateTpEstimate = (losingTrades, winningTrades, baseline) => {
   }
 
   return {
-    estimate: clamp(estimate, 1.5, 15),
+    // B3 (TP1 ~1R): TP estimate bị chặn trong [1.0, 2.0] — không bao giờ
+    // học lại TP ≥ 2.5R (trước đây [1.5, 15]).
+    estimate: clamp(estimate, 1.0, 2.0),
     evidenceCount: lossMfeAtr.length
   };
 };

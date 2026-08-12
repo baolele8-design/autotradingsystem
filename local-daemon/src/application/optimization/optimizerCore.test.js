@@ -110,6 +110,19 @@ test('derives a stable strategy id and prefers an explicit id', () => {
   );
 });
 
+test('rejects UNCLASSIFIED exit reasons as discretionary-or-unresolved (A3-2)', () => {
+  const { usable, rejectionCounts } = partitionUsableTrades([
+    makeTrade(),
+    makeTrade({ exit_reason: 'UNCLASSIFIED_EXCHANGE_CLOSE' })
+  ]);
+
+  assert.equal(usable.length, 1);
+  assert.equal(
+    rejectionCounts['discretionary-or-unresolved-exit'],
+    1
+  );
+});
+
 test('rejects discretionary, unresolved, and inconsistent outcomes', () => {
   const { usable, rejectionCounts } = partitionUsableTrades([
     makeTrade(),
@@ -275,8 +288,10 @@ test('does not learn a strategy-tier cell below fifteen usable samples', () => {
   assert.deepEqual(
     cell.dynamic_targets.optimized,
     {
+      // B3 (TP1 ~1R): tpMult baseline mới = round(1.73 × 1.10, 4) = 1.903
+      // (trước: round(3.0 × 0.85, 4) = 2.55)
       slMult: 1.65,
-      tpMult: 2.55,
+      tpMult: 1.903,
       tHold_modifier: 1
     }
   );
@@ -298,8 +313,10 @@ test('uses the routed strategy profile as the shrinkage baseline', () => {
   });
 
   assert.deepEqual(cell.dynamic_targets.optimized, {
+    // B3 (TP1 ~1R): CAPITULATION_RECLAIM profile tpMult 1.38 × 1.10 = 1.518
+    // (trước: 2.8 × 0.85 = 2.38)
     slMult: 1.32,
-    tpMult: 2.38,
+    tpMult: 1.518,
     tHold_modifier: 1
   });
   assert.deepEqual(
@@ -348,12 +365,14 @@ test('learns only target and hold fields with shrinkage', () => {
   assert.ok(
     cell.dynamic_targets.optimized.slMult < 2.5
   );
+  // B3 (TP1 ~1R): estimate clamp [1.0, 2.0] chặn TP học lại ≥ 2.5R;
+  // shrinkage từ baseline 1.903 với estimate 2.0 → ~1.935
   assert.ok(
     cell.dynamic_targets.optimized.tpMult >
-      2.55
+      1.9
   );
   assert.ok(
-    cell.dynamic_targets.optimized.tpMult < 4
+    cell.dynamic_targets.optimized.tpMult < 2.0
   );
   assert.ok(cell.dynamic_targets.optimized.tHold_modifier > 1);
   assert.ok(cell.dynamic_targets.optimized.tHold_modifier < 1.15);

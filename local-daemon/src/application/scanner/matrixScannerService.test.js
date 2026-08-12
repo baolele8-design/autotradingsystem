@@ -247,7 +247,9 @@ test('C2: thiếu true_ev → tái tính đúng công thức entry (prior 0.45)'
 
 test('C2 regression: true_ev âm thật + rr thấp → h2 FAIL (trước fake 1.0 luôn pass)', () => {
   const mathCore = computePendingOrderMathCore(
-    pendingLog({ true_ev: '-0.5', rr: '1.5' }),
+    // B3 (TP1 ~1R): requiredRR hạ 1.8 → 0.7 nên rr 1.5 cũ giờ PASS;
+  // dùng rr 0.5 (< 0.7) để giữ đúng kịch bản regression fail.
+    pendingLog({ true_ev: '-0.5', rr: '0.5' }),
     {
       symbol: 'BTCUSDT',
       currentPrice: 100,
@@ -258,7 +260,7 @@ test('C2 regression: true_ev âm thật + rr thấp → h2 FAIL (trước fake 1
     }
   );
   assert.equal(mathCore.trueEVValue, -0.5);
-  // bbwRank 50 → requiredRR 1.8; rr 1.5 < 1.8 và EV −0.5 < −0.05 → h2 phải fail
+  // bbwRank 50 → requiredRR 0.7; rr 0.5 < 0.7 và EV −0.5 < −0.05 → h2 phải fail
   const result = evaluateWithCore(mathCore);
   assert.equal(gate(result, 'h2').passed, false);
 });
@@ -279,7 +281,9 @@ test('C2: true_ev dương + rr thấp → h2 PASS nhờ EV (cánh cửa EV dươ
   assert.equal(gate(result, 'h2').passed, true);
 });
 
-test('C2: rr "1.0" + winRate 0/totalClosed 0 → EV prior = −0.10 → h2 fail', () => {
+// B3 (TP1 ~1R): requiredRR hạ 1.8 → 0.7 (bbwRank 50). rr "1.0" với EV prior
+// −0.10 giờ PASS nhờ cửa RR (trước: fail vì 1.0 < 1.8).
+test('B3: rr "1.0" + winRate 0/totalClosed 0 → EV prior −0.10 nhưng rr ≥ 0.7 → h2 PASS', () => {
   const mathCore = computePendingOrderMathCore(
     pendingLog({ rr: '1.0', true_ev: null }),
     {
@@ -294,7 +298,7 @@ test('C2: rr "1.0" + winRate 0/totalClosed 0 → EV prior = −0.10 → h2 fail'
   // evWinRate = 0.45 (prior); EV = 0.45*1.0 − 0.55 = −0.10
   assert.ok(Math.abs(mathCore.trueEVValue - (-0.1)) < 1e-9);
   const result = evaluateWithCore(mathCore);
-  assert.equal(gate(result, 'h2').passed, false);
+  assert.equal(gate(result, 'h2').passed, true);
 });
 
 test('C2: rr "0" thật giữ 0 (không fallback 1.5) → EV âm → h2 fail', () => {

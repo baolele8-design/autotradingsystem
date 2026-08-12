@@ -1,6 +1,7 @@
 import {
   isNewEntrySymbolAllowed
 } from '../../../../src/domain/trading/symbolEntryPolicy.js';
+import { evaluateBtcEntryGate } from './btcEntryGate.js';
 
 const numeric = value => {
   const parsed = Number.parseFloat(value);
@@ -29,6 +30,7 @@ export function selectExecutableSetups(
   const filterStats = {
     badInterval: 0,
     blockedSymbol: 0,
+    btcRegimeBlocked: 0,
     cooldown: 0,
     duplicate: 0,
     invalid: 0,
@@ -39,6 +41,7 @@ export function selectExecutableSetups(
     positionCap: 0
   };
   const validSetups = [];
+  const btcGateBlocked = [];
   const alreadyOccupied = new Set(occupiedSymbols);
   const selectedSymbols = new Set();
   const rankedSetups = [...(Array.isArray(setups) ? setups : [])]
@@ -59,6 +62,17 @@ export function selectExecutableSetups(
       setup.rolloutMode === 'PAPER_ONLY'
     ) {
       filterStats.paperOnly += 1;
+      continue;
+    }
+    const btcGate = evaluateBtcEntryGate({
+      direction: setup.direction,
+      assetTier: setup.assetTier,
+      btcRegime: setup.btcRegime,
+      symbol
+    });
+    if (btcGate.blocked) {
+      filterStats.btcRegimeBlocked += 1;
+      btcGateBlocked.push({ ...setup, symbol, ...btcGate });
       continue;
     }
     if (!allowedIntervals.includes(setup.interval)) {
@@ -112,5 +126,5 @@ export function selectExecutableSetups(
     cappedSetups.push(setup);
   }
 
-  return { filterStats, validSetups: cappedSetups };
+  return { filterStats, validSetups: cappedSetups, btcGateBlocked };
 }

@@ -91,3 +91,33 @@ test('appliedRiskPercent không phụ thuộc score nữa (score 40 vs 90 cùng 
   assert.equal(low.appliedRiskPercent, high.appliedRiskPercent);
   assert.equal(parseFloat(high.appliedRiskPercent), 1.0);
 });
+
+// O4 (team-D 2026-08-12): Bayesian prior theo BTC regime — với totalClosed < 30
+// prior có trọng số, EV phải thấp hơn khi Downtrend 4h (0.42) và cao hơn khi
+// Uptrend (0.48) so với mặc định 0.45.
+function evWithRegime(btcRegime) {
+  const result = deriveMathCore(
+    buildFixture({
+      tradeStats: { totalClosed: 10, winRate: 0.5, historicalRR: 1.5 },
+      btcRegime
+    })
+  );
+  return parseFloat(result.trueEVValue);
+}
+
+test('O4: btcRegime Downtrend hạ Bayesian prior → EV thấp hơn mặc định', () => {
+  const evDefault = evWithRegime(undefined);
+  const evDowntrend = evWithRegime('Downtrend');
+  assert.ok(evDowntrend < evDefault, `expected ${evDowntrend} < ${evDefault}`);
+});
+
+test('O4: btcRegime Uptrend nâng Bayesian prior → EV cao hơn mặc định', () => {
+  const evDefault = evWithRegime(undefined);
+  const evUptrend = evWithRegime('Uptrend');
+  assert.ok(evUptrend > evDefault, `expected ${evUptrend} > ${evDefault}`);
+});
+
+test('O4: btcRegime khác (Range/thiếu) giữ prior mặc định 0.45', () => {
+  assert.equal(evWithRegime(undefined), evWithRegime('Range'));
+  assert.equal(evWithRegime(undefined), evWithRegime('Unknown'));
+});

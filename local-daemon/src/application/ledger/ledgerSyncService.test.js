@@ -224,6 +224,91 @@ test('ledger exit reason requires the triggered algo actualOrderId to match the 
   );
 });
 
+test('ledger traces UNCLASSIFIED exits with a console.warn diagnostic (A1-1)', () => {
+  const warnMock = test.mock.method(console, 'warn', () => {});
+  try {
+    const reason = resolveExitReason(
+      {
+        symbol: 'BTCUSDT',
+        direction: 'LONG',
+        exit_reason: null
+      },
+      { orderId: 999 }
+    );
+    assert.equal(reason, 'UNCLASSIFIED_EXCHANGE_CLOSE');
+    assert.equal(warnMock.mock.calls.length, 1);
+    const [marker, payload] = warnMock.mock.calls[0].arguments;
+    assert.equal(marker, '[LEDGER UNCLASSIFIED]');
+    assert.equal(payload.exitOrderId, 999);
+    assert.equal(payload.storedReason, '');
+    assert.equal(payload.symbol, 'BTCUSDT');
+    assert.equal(payload.direction, 'LONG');
+  } finally {
+    warnMock.mock.restore();
+  }
+});
+
+test('ledger exit reason classifies qts-ex-pbtc / qts-ex-ptp / qts-tp / qts-sl prefixes (A1-3)', () => {
+  assert.equal(
+    resolveExitReason({ direction: 'LONG' }, {
+      orderId: 1,
+      clientOrderId: 'qts-ex-pbtc-trade123'
+    }),
+    'PORTFOLIO_TP_BTC_BREAK'
+  );
+  assert.equal(
+    resolveExitReason({ direction: 'LONG' }, {
+      orderId: 2,
+      clientOrderId: 'qts-ex-ptp-trade123'
+    }),
+    'TAKE_PROFIT_HIT'
+  );
+  assert.equal(
+    resolveExitReason({ direction: 'LONG' }, {
+      orderId: 3,
+      clientOrderId: 'qts-tp-trade123'
+    }),
+    'TAKE_PROFIT_HIT'
+  );
+  assert.equal(
+    resolveExitReason(
+      {
+        direction: 'LONG',
+        trailing_activated: false,
+        protection_stage: 'NONE'
+      },
+      { orderId: 4, clientOrderId: 'qts-sl-trade123' }
+    ),
+    'STOP_LOSS_HIT'
+  );
+  assert.equal(
+    resolveExitReason(
+      {
+        direction: 'LONG',
+        trailing_activated: true,
+        protection_stage: 'NONE'
+      },
+      { orderId: 5, clientOrderId: 'qts-sl-trade123' }
+    ),
+    'TRAILING_STOP_HIT'
+  );
+});
+
+test('ledger exit reason leaves unknown qts-ex prefixes UNCLASSIFIED (A1-3 negative)', () => {
+  const warnMock = test.mock.method(console, 'warn', () => {});
+  try {
+    assert.equal(
+      resolveExitReason({ direction: 'LONG' }, {
+        orderId: 6,
+        clientOrderId: 'qts-ex-mystery-trade123'
+      }),
+      'UNCLASSIFIED_EXCHANGE_CLOSE'
+    );
+  } finally {
+    warnMock.mock.restore();
+  }
+});
+
 test('ledger exit reason recognizes stable forced-exit client order IDs', () => {
   const log = { direction: 'LONG' };
   assert.equal(

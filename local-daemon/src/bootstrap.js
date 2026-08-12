@@ -147,7 +147,8 @@ server.listen(PORT, async () => {
 });
 
 const {
-    matrixScannerLoop
+    matrixScannerLoop,
+    getBtcRegimeSnapshot
 } = createMatrixScannerService({
     btcReturnsCache,
     getConnectedClients: () => getConnectedClients(),
@@ -185,6 +186,7 @@ const {
 } = createProtectionService({
     getCurrentAiModel,
     markPriceCache,
+    marketDataCache,
     observeOpenTrades: liveTradePathService.observeOpenTrades,
     readBinanceReq,
     safeFetch,
@@ -248,8 +250,9 @@ registerRoutes({
     safeFetch,
     sendBinanceReq,
     sendSpotBinanceReq,
-    setGlobalMvrvZScore,
-    withSymbolOrderLock
+setGlobalMvrvZScore,
+    withSymbolOrderLock,
+    getBtcRegimeSnapshot
 });
 registerBinanceRateRoutes({ app, rateCoordinator });
 
