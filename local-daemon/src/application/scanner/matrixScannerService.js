@@ -296,8 +296,12 @@ export function createMatrixScannerService(context) {
       try {
           // [VÁ LỖI 1]: Chỉ lấy các lệnh trong 12h qua để check Gate Cooldown chính xác nhất, tránh bị trôi dữ liệu khi limit(200)
           const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+          // P0-2 (2026-08-13): resolved logs 90 ngày (WIN/LOSS) cho h2_realized —
+          // granularity global-direction (LONG n=94, SHORT n=134 — đủ cả 2).
+          // Guard pnl_usd + risk_amount_usd > 0 ở bước lọc sau query.
+          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
   
-          const [ticker24hAll, premiumIndexAll, bookTickerAll, cmcData, accountInfo, leverageBracketsRes, tradeFeesRes, { data: tradeLogs }, exchangeInfoRes, positionsRisk] = await Promise.all([
+          const [ticker24hAll, premiumIndexAll, bookTickerAll, cmcData, accountInfo, leverageBracketsRes, tradeFeesRes, { data: tradeLogs }, exchangeInfoRes, positionsRisk, { data: resolvedTradeLogs }] = await Promise.all([
               marketDataCache.getTicker24hAll() ||
                 safeFetch('https://fapi.binance.com/fapi/v1/ticker/24hr'),
               marketDataCache.getPremiumIndexAll() ||
@@ -313,8 +317,20 @@ export function createMatrixScannerService(context) {
           .or(`status.in.(OPEN,PENDING),created_at.gte.${twelveHoursAgo}`)
           .order('created_at', { ascending: false }),
               safeFetch('https://fapi.binance.com/fapi/v1/exchangeInfo'),
-              readBinanceReq('/fapi/v2/positionRisk') 
+              readBinanceReq('/fapi/v2/positionRisk'),
+              supabase.from('trade_logs')
+                  .select('*')
+                  .or(`status.in.(WIN,LOSS),created_at.gte.${ninetyDaysAgo}`)
+                  .order('created_at', { ascending: false })
           ]);
+  
+          // P0-2 (2026-08-13): guard resolved logs — chỉ giữ rows có pnl_usd
+          // hợp lệ và risk_amount_usd > 0 (mẫu số R-multiple).
+          const resolvedTradeLogsClean = (resolvedTradeLogs || []).filter(t =>
+              t.pnl_usd !== null && t.pnl_usd !== undefined &&
+              Number.isFinite(Number.parseFloat(t.pnl_usd)) &&
+              Number.parseFloat(t.risk_amount_usd) > 0
+          );
   
           const premiumMap = new Map((premiumIndexAll || []).map(i => [i.symbol, i]));
           const bookMap = new Map((bookTickerAll || []).map(i => [i.symbol, i]));
@@ -605,7 +621,11 @@ btcReturnsCache.clear();
                           );
                           const htfSma200 = QuantMath.sma(closesHTF, 200);
   
-                          let obi = 0.5; let realSpreadPct = 0.05;
+                          // P1-2 (2026-08-13): realSpreadPct = null khi thiếu
+                          // bookTick (KHÔNG default 0.05) — h1 fail-closed +
+                          // classifyAssetTier không nâng tier + costDrag dùng
+                          // spread tối đa (không phồng theoreticalRR).
+                          let obi = 0.5; let realSpreadPct = null;
                           const bookTick = bookMap.get(symbol);
                           if (bookTick && bookTick.bidPrice && bookTick.askPrice) {
                               const bid = parseFloat(bookTick.bidPrice);
@@ -874,7 +894,16 @@ btcReturnsCache.clear();
                                   totalClosed
                               });
   
-                              const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategy);
+                              // P1-2 (2026-08-13): gắn assetTier (pLog.asset_tier
+                              // đã persist lúc đặt) vào strategy object để h1 áp
+                              // spread cap theo tier; giữ nguyên contract cũ
+                              // (string → strategyId; object → giữ policy).
+                              const pendingStrategyForGates =
+                                  typeof pendingStrategy === 'object' && pendingStrategy
+                                      ? { ...pendingStrategy, assetTier: pLog.asset_tier || '' }
+                                      : { strategyId: stratNameClean, assetTier: pLog.asset_tier || '' };
+
+                              const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategyForGates, resolvedTradeLogsClean);
   
                               // 3. RA QUYẾT ĐỊNH
                               if (!pLogGates.isApproved) {
@@ -1357,11 +1386,11 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               };
   
                               let finalTradeType = 'FUTURES';
-                              let gates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'FUTURES', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo);
+                              let gates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'FUTURES', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean);
                               
                               // Nếu Futures tịt vì Margin (Gate H4), thử nảy qua SPOT xem pass không!
                               if (direction === 'LONG' && !gates.isApproved && gates.hardGates.find(g => g.id === 'h4' && !g.passed)) {
-                                  const spotGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'SPOT', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo);
+                                  const spotGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'SPOT', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean);
                                   if (spotGates.isApproved) {
                                       gates = spotGates;
                                       finalTradeType = 'SPOT';
@@ -1474,6 +1503,13 @@ btcRegime:
                                       cmf: autoData.cmf,
                                       bbwRank: autoData.bbwRank,
                                       oiDelta: autoData.oiDelta || 0,
+                                      // P2-2 (2026-08-13): isOiSpiking shadow —
+                                      // OI hiện tại > OI EMA14 tại lúc quét.
+                                      // KHÔNG wire trade logic; persist oi_spike
+                                      // cần ALTER TABLE (xem local-daemon/sql/
+                                      // add_missing_columns.sql) — proxy đã persist:
+                                      // oi_delta lúc entry (autoBot.js:415).
+                                      isOiSpiking: autoData.isOiSpiking === true,
                                       fundingRate: fundingRateValue,
                                       fundingSlope: fundingSlopeValue,
                                       takerRatio: apiMacro.takerBuySellRatio,

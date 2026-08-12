@@ -47,6 +47,7 @@ export function createProtectionService(context) {
     markPriceCache,
     marketDataCache = null,
     observeOpenTrades = () => {},
+    now = () => Date.now(),
     readBinanceReq,
     safeFetch,
     sendBinanceReq,
@@ -243,6 +244,10 @@ export function createProtectionService(context) {
               return;
           }
   
+          // P0-1 (2026-08-13): ghi nhận mốc thời gian snapshot positionRisk
+          // NGAY TRƯỚC fetch — fallback markPrice chỉ được tin nếu snapshot
+          // này còn tươi (≤ 30s); quá hạn → fail-closed giữ persisted.
+          const positionsRequestedAt = now();
           const positionsRes = await readBinanceReq(
               '/fapi/v2/positionRisk',
               {},
@@ -714,31 +719,44 @@ export function createProtectionService(context) {
               const hasFreshStreamPrice =
                   cachedMark &&
                   Date.now() - cachedMark.updatedAt <= 5000;
+              const fallbackMarkPrice =
+                  Number.parseFloat(position.markPrice);
+              // P0-1 (2026-08-13): fallback markPrice chỉ hợp lệ khi snapshot
+              // positionRisk còn tươi (≤ 30s) VÀ giá parse được. Ngược lại
+              // fail-closed giữ persisted (không advance bằng dữ liệu cũ/NaN).
+              const positionRiskAgeMs = now() - positionsRequestedAt;
+              const positionRiskFresh = positionRiskAgeMs <= 30_000;
+              const markFallbackUsable =
+                  !hasFreshStreamPrice &&
+                  positionRiskFresh &&
+                  Number.isFinite(fallbackMarkPrice);
               const markPrice = hasFreshStreamPrice
                   ? cachedMark.price
-                  : Number.parseFloat(position.markPrice);
+                  : fallbackMarkPrice;
               const initialRiskPerCoin =
                   Number.parseFloat(trade.initial_risk_per_coin);
               const isLong = trade.direction === 'LONG';
               const persistedHighWater =
                   Number.parseFloat(trade.high_water_price);
+              const persistedOrEntry =
+                  Number.isFinite(persistedHighWater)
+                      ? persistedHighWater
+                      : entryPrice;
               const observedHighWater = hasFreshStreamPrice
                   ? (
                       isLong
-                          ? Math.max(
-                              Number.isFinite(persistedHighWater)
-                                  ? persistedHighWater
-                                  : entryPrice,
-                              cachedMark.high
-                          )
-                          : Math.min(
-                              Number.isFinite(persistedHighWater)
-                                  ? persistedHighWater
-                                  : entryPrice,
-                              cachedMark.low
-                          )
+                          ? Math.max(persistedOrEntry, cachedMark.high)
+                          : Math.min(persistedOrEntry, cachedMark.low)
                   )
-                  : persistedHighWater;
+                  : (
+                      markFallbackUsable
+                          ? (
+                              isLong
+                                  ? Math.max(persistedOrEntry, fallbackMarkPrice)
+                                  : Math.min(persistedOrEntry, fallbackMarkPrice)
+                          )
+                          : persistedHighWater
+                  );
   
               if (
                   !Number.isFinite(initialRiskPerCoin) ||

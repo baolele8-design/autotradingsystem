@@ -471,9 +471,30 @@ const scanKlines = (count = 250) => {
 const scanMockContext = (overrides = {}) => {
   let captured = [];
   const clients = [{ readyState: 1, send: (msg) => captured.push(JSON.parse(msg)) }];
+  // P0-2 (2026-08-13): scanner query thêm resolved logs (WIN/LOSS 90d) qua
+  // cùng chain select→or→order. Mock phân loại theo filter string: query
+  // resolved (chứa 'WIN') trả 5 rows (< 30 → h2 giữ plannedEV mode → mọi
+  // test scanner hiện tại không đổi hành vi); query 12h trả 40 rows như cũ.
+  const resolvedRows = Array.from({ length: 5 }, (_, i) => ({
+    id: `resolved-${i}`,
+    symbol: 'BTCUSDT',
+    status: 'WIN',
+    direction: 'LONG',
+    interval: '15m',
+    pnl_usd: 3 + (i % 5),
+    risk_amount_usd: 1,
+    created_at: new Date(Date.now() - i * 60_000).toISOString()
+  }));
+  const resolvedQuery = {
+    select: () => resolvedQuery,
+    or: () => resolvedQuery,
+    order: async () => ({ data: resolvedRows, error: null })
+  };
   const supabaseQuery = {
     select: () => supabaseQuery,
-    or: () => supabaseQuery,
+    or: (filters) => String(filters || '').includes('WIN')
+      ? resolvedQuery
+      : supabaseQuery,
     order: async () => ({
       data: Array.from({ length: 40 }, (_, i) => ({
         id: `win-${i}`,
@@ -497,7 +518,9 @@ const scanMockContext = (overrides = {}) => {
       getKlines: async () => scanKlines(250),
       getTicker24hAll: async () => null,
       getPremiumIndexAll: async () => null,
-      getBookTickerAll: async () => null
+      getBookTickerAll: async () => [
+        { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '100.01', bidQty: '10', askQty: '10' }
+      ]
     },
     readBinanceReq: async () => ({}),
     sendBinanceReq: async () => ({}),
@@ -643,7 +666,9 @@ test('F-E2a e2e: PRICE_FILTER tickSize from exchangeInfo is wired into the struc
       getKlines: async () => structureKlines(250),
       getTicker24hAll: async () => null,
       getPremiumIndexAll: async () => null,
-      getBookTickerAll: async () => null
+      getBookTickerAll: async () => [
+        { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '100.01', bidQty: '10', askQty: '10' }
+      ]
     }
   });
   await svc.runMatrixScanner();
@@ -755,9 +780,23 @@ const scanWithKlines = async (klines, winsDirection) => {
     interval: '15m', pnl_usd: 3 + (i % 5), risk_amount_usd: 1,
     created_at: new Date(Date.now() - i * 60_000).toISOString()
   }));
+  // P0-2 (2026-08-13): query resolved (WIN/LOSS 90d) trả 5 rows (< 30) →
+  // h2 giữ plannedEV mode — các test F-E2b đo SL structure, không đo h2.
+  const resolvedRows = Array.from({ length: 5 }, (_, i) => ({
+    id: `resolved-${i}`, symbol: 'BTCUSDT', status: 'WIN', direction: winsDirection,
+    interval: '15m', pnl_usd: 3 + (i % 5), risk_amount_usd: 1,
+    created_at: new Date(Date.now() - i * 60_000).toISOString()
+  }));
+  const resolvedQuery = {
+    select: () => resolvedQuery,
+    or: () => resolvedQuery,
+    order: async () => ({ data: resolvedRows, error: null })
+  };
   const supabaseQuery = {
     select: () => supabaseQuery,
-    or: () => supabaseQuery,
+    or: (filters) => String(filters || '').includes('WIN')
+      ? resolvedQuery
+      : supabaseQuery,
     order: async () => ({ data: wins, error: null })
   };
   const { svc, getResults } = scanMockContext({
@@ -765,7 +804,9 @@ const scanWithKlines = async (klines, winsDirection) => {
       getKlines: async () => klines,
       getTicker24hAll: async () => null,
       getPremiumIndexAll: async () => null,
-      getBookTickerAll: async () => null
+      getBookTickerAll: async () => [
+        { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '100.01', bidQty: '10', askQty: '10' }
+      ]
     },
     supabase: { from: () => supabaseQuery }
   });
@@ -901,4 +942,56 @@ test('F-E2b (f): payload slApplied phản ánh SL thật đang dùng (STRUCTURE|
   const atrSetups = getResults()[0].data;
   assert.ok(atrSetups.length > 0);
   assert.ok(atrSetups.every(s => s.slApplied === 'ATR'));
+});
+
+// =====================================================================
+// P0-2 (2026-08-13): resolved logs 90d (WIN/LOSS) phải được truyền vào
+// evaluateGates — h2 AND-gate chặn setup khi realized EV âm.
+// =====================================================================
+test('P0-2 e2e: resolved 90d toàn LOSS cùng hướng (n=40 ≥ 30) → h2 AND-gate chặn LONG setup', async () => {
+  // close_time 3h (ngoài cooldown h_cd 2h) → chỉ h2 là nguồn chặn LONG.
+  const lossRows = Array.from({ length: 40 }, (_, i) => ({
+    id: `loss-${i}`,
+    symbol: 'BTCUSDT',
+    status: 'LOSS',
+    direction: 'LONG',
+    pnl_usd: -10,
+    risk_amount_usd: 20,
+    close_time: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
+  }));
+  const lossChain = {
+    select: () => lossChain,
+    or: () => lossChain,
+    order: async () => ({ data: lossRows, error: null })
+  };
+  const { svc, getResults } = scanMockContext({
+    supabase: { from: () => lossChain }
+  });
+  await svc.runMatrixScanner();
+  const setups = getResults()[0].data;
+  // h2Realized LONG = 0×avgWinR − 1×0.5 = −0.5 ≤ −0.05 → AND-gate fail
+  // (bất kể rr/EV) → mọi LONG setup bị chặn; SHORT vốn bị h_msb chặn
+  // trong fixture uptrend (Bullish_MSB).
+  assert.equal(
+    setups.filter(s => s.direction === 'LONG').length,
+    0,
+    `resolved 40 LOSS → LONG h2 phải chặn, còn ${setups.filter(s => s.direction === 'LONG').length} LONG setup`
+  );
+});
+
+// =====================================================================
+// P2-2 (2026-08-13): isOiSpiking SHADOW — candidate payload mang boolean,
+// KHÔNG wire trade logic (persist oi_spike cần ALTER TABLE — xem
+// local-daemon/sql/add_missing_columns.sql; proxy đã persist: oi_delta).
+// =====================================================================
+test('P2-2 shadow: candidate payload mang isOiSpiking (boolean)', async () => {
+  const { svc, getResults } = scanMockContext();
+  await svc.runMatrixScanner();
+  const setups = getResults()[0].data;
+  assert.ok(setups.length > 0, 'fixture phải tạo ≥1 approved setup');
+  for (const setup of setups) {
+    assert.ok('isOiSpiking' in setup, 'candidate phải mang isOiSpiking');
+    assert.equal(typeof setup.isOiSpiking, 'boolean');
+  }
 });

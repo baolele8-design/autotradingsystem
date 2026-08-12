@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   calculateTemporalBarrier,
+  classifyAssetTier,
+  costDrag,
   dynamicAsymmetricTargets,
   btcTrendAlignmentFor
 } from './risk.js';
@@ -391,4 +393,57 @@ test('btcTrendAlignmentFor maps direction vs BTC regime', () => {
   assert.equal(btcTrendAlignmentFor('LONG', null), null);
   assert.equal(btcTrendAlignmentFor('LONG', ''), null);
   assert.equal(btcTrendAlignmentFor('LONG', 'SomeWeirdLabel'), null);
+});
+
+// =====================================================================
+// P1-2 (2026-08-13): null-spread trọn gói — classifyAssetTier không nâng
+// tier khi spread null (trước: null <= 0.015 → Number(null)=0 → Tier 2
+// fail-open); costDrag null → cost tối đa (không phồng theoreticalRR);
+// dynamicAsymmetricTargets trả assetTier (để h1 theo tier).
+// =====================================================================
+test('P1-2: classifyAssetTier null spread → KHÔNG nâng tier (fail-closed)', () => {
+  const tier = classifyAssetTier('XYZUSDT', 50_000_000, null);
+  assert.notEqual(tier, 'Tier 2: Liquid Majors');
+  assert.equal(tier, 'Tier 4: Nano/High-Risk');
+});
+
+test('P1-2: classifyAssetTier undefined spread → KHÔNG nâng tier', () => {
+  const tier = classifyAssetTier('XYZUSDT', 50_000_000, undefined);
+  assert.equal(tier, 'Tier 4: Nano/High-Risk');
+});
+
+test('P1-2: classifyAssetTier spread hợp lệ → Tier 2 vẫn hoạt động (regression)', () => {
+  const tier = classifyAssetTier('XYZUSDT', 50_000_000, 0.01);
+  assert.equal(tier, 'Tier 2: Liquid Majors');
+});
+
+test('P1-2: costDrag spreadPercent null → dùng spread mặc định tối đa 0.10% (không phồng RR)', () => {
+  // LIMIT/LIMIT, funding 0, holding 1: spreadCost = 0.10/100/2 = 0.0005 mỗi chiều
+  // entryCost = (0 + 0.0002 + 0.0005) * 100 = 0.07; exit tương tự → 0.14
+  const total = costDrag(
+    100, 'FUTURES', 'LONG', 'LIMIT', 'LIMIT', 0, null, 1,
+    0.0002, 0.0004, '1h', 0.5
+  );
+  assert.ok(Math.abs(total - 0.14) < 1e-9, `costDrag(null) = ${total}`);
+});
+
+test('P1-2: costDrag spreadPercent 0 (thật) → vẫn 0 spread cost (chỉ null/thiếu mới fail-closed)', () => {
+  const total = costDrag(
+    100, 'FUTURES', 'LONG', 'LIMIT', 'LIMIT', 0, 0, 1,
+    0.0002, 0.0004, '1h', 0.5
+  );
+  // entryCost = (0 + 0.0002 + 0) * 100 = 0.02; exit tương tự → 0.04
+  assert.ok(Math.abs(total - 0.04) < 1e-9, `costDrag(0) = ${total}`);
+});
+
+test('P1-2: dynamicAsymmetricTargets trả assetTier (h1 tier cap cần nó)', () => {
+  const targets = dynamicAsymmetricTargets(
+    fallbackInput.autoData,
+    fallbackInput.apiMacro,
+    fallbackInput.vectorDetails,
+    'LONG',
+    null,
+    'Tier 3'
+  );
+  assert.equal(targets.assetTier, 'Tier 3');
 });

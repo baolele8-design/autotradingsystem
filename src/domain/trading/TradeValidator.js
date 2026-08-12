@@ -1,5 +1,12 @@
 // FILE: src/core/TradeValidator.js
 
+// P1-1 (2026-08-13): funding dead zone SHORT — đơn vị % (scanner
+// fundingRateValue = lastFundingRate × 100; CSV 0.004522). Biên dưới KHÔNG
+// mở rộng xuống 0: bucket funding==0 n=3 (WR 33%) — claim critic "WR 29.4%"
+// không tái hiện trên cả 3 CSV; 0 là giá trị thật, không phải missing
+// (chỉ 1/134 SHORT resolved thiếu funding_rate). Tech-debt TD-015.
+const FUNDING_DEAD_ZONE_MAX_PCT = 0.0045;
+
 export const TradeValidator = {
   evaluateScore: (autoData, apiMacro, vectorDetails, direction, mvrvZScore, symbol, aiModel) => {
     if (!autoData || !apiMacro || !vectorDetails) return { score: 0, synergyText: "", penaltyText: "", checks: {}, checkScores: {}, w: {}, passingScore: 50 };
@@ -141,12 +148,14 @@ export const TradeValidator = {
     return { score: totalScore, synergyText, penaltyText, checks, checkScores, w, passingScore };
   },
 
-  evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol, strategy = '') => {
+  evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol, strategy = '', resolvedTradeLogs = null) => {
     const { l1, l2, l3, l5 } = vectorDetails;
     const { score, synergyText, penaltyText, checks, checkScores, passingScore } = systemScore;
-    // B3 (TP1 ~1R): requiredRR hạ 2.0/1.8 → 0.8/0.7 — TP mới ~1R nên
-    // yêu cầu R:R 1.8R sẽ chặn toàn bộ setup hợp lệ.
-    const requiredRR = autoData.bbwRank > 80 ? 0.8 : 0.7;
+    // B3 (TP1 ~1R) → P0-2 (2026-08-13, critic): requiredRR 1.2/1.0 theo
+    // breakeven — breakeven RR thực 1.37 (WR 0.474, winR 0.508, lossR 0.628);
+    // bước trung gian giữa 0.85 vô nghĩa (chặn 0.4% lệnh) và 1.37
+    // (chặn 15-25% — quyết định sau khi đo F-E1a rejection).
+    const requiredRR = autoData.bbwRank > 80 ? 1.2 : 1.0;
 
     const recentLossSameDirection = tradeLogs && tradeLogs.some(log => 
         log.symbol === symbol && 
@@ -224,35 +233,96 @@ export const TradeValidator = {
     // =========================================================================
     // HỆ THỐNG HARD GATES MỚI (BỨC TƯỜNG KỶ LUẬT THÉP)
     // =========================================================================
-    // F4 (P6): diagnostic h2_realized — E[R] thực tế từ tradeLogs cùng hướng.
-    // Informational: KHÔNG đổi isApproved (đợi benchmark sạch trước khi block).
-    // E_R = WR×avgWinR − (1−WR)×avgLossR, avgWinR = 0.50, avgLossR = 0.62 (từ dữ liệu).
-    const resolvedSameDirection = (tradeLogs || []).filter(log =>
+    // F4 (P6) → P0-2 (2026-08-13): h2_realized — E[R] thực tế từ resolved logs
+    // THẬT (90 ngày, global-direction — query riêng matrixScannerService,
+    // guard pnl_usd + risk_amount_usd > 0). Nguồn ưu tiên resolvedTradeLogs,
+    // fallback tradeLogs khi caller không cung cấp. Công thức giống scanner
+    // (matrixScannerService.js:496-502): rMultiple = pnl_usd/max(risk_amount_usd,1),
+    // avgWinR/avgLossR rolling (bỏ hằng số 0.50/0.62). n < 30 → null →
+    // plannedEV fallback (hành vi OR cũ).
+    // E_R = WR×avgWinR − (1−WR)×avgLossR.
+    const resolvedSource = Array.isArray(resolvedTradeLogs)
+      ? resolvedTradeLogs
+      : (tradeLogs || []);
+    const resolvedSameDirection = resolvedSource.filter(log =>
       log.direction === direction &&
       (log.status === 'WIN' || log.status === 'LOSS')
     );
     let h2Realized = null;
-    if (resolvedSameDirection.length >= 5) {
+    if (resolvedSameDirection.length >= 30) {
       const realizedWinCount = resolvedSameDirection.filter(
         log => log.status === 'WIN'
       ).length;
       const realizedWinRate =
         realizedWinCount / resolvedSameDirection.length;
+      const realizedLossCount =
+        resolvedSameDirection.length - realizedWinCount;
+      const realizedWinRTotal = resolvedSameDirection
+        .filter(log => log.status === 'WIN')
+        .reduce((sum, log) =>
+          sum + (parseFloat(log.pnl_usd) || 0) /
+            (parseFloat(log.risk_amount_usd) || 1), 0);
+      const realizedLossRTotal = resolvedSameDirection
+        .filter(log => log.status === 'LOSS')
+        .reduce((sum, log) =>
+          sum + Math.abs(parseFloat(log.pnl_usd) || 0) /
+            (parseFloat(log.risk_amount_usd) || 1), 0);
+      const avgWinR =
+        realizedWinCount > 0 ? realizedWinRTotal / realizedWinCount : 0;
+      const avgLossR =
+        realizedLossCount > 0 ? realizedLossRTotal / realizedLossCount : 0;
       h2Realized =
-        realizedWinRate * 0.5 - (1 - realizedWinRate) * 0.62;
+        realizedWinRate * avgWinR - (1 - realizedWinRate) * avgLossR;
     }
+
+    // P1-2 (2026-08-13): spread cap theo asset tier — đồng bộ
+    // strategyRouter.js:423-428 (Tier 1/2 → 0.03, Tier 3 → 0.06, khác → 0.10;
+    // đơn vị % vì scanner realSpreadPct = (ask−bid)/bid × 100).
+    // assetTier đến từ strategy object (dynamicAsymmetricTargets trả assetTier;
+    // scanner pending path truyền pLog.asset_tier). Thiếu tier → cap rộng nhất.
+    const assetTierText = String(
+      typeof strategy === 'object' && strategy
+        ? (strategy.assetTier || '')
+        : ''
+    );
+    let spreadCap = 0.10;
+    if (assetTierText.includes('Tier 1') || assetTierText.includes('Tier 2')) {
+      spreadCap = 0.03;
+    } else if (assetTierText.includes('Tier 3')) {
+      spreadCap = 0.06;
+    }
+    // Fail-closed: null/undefined (thiếu bookTick) → h1 block.
+    const spreadPct = apiMacro.realSpreadPct;
+    const spreadSafe =
+      spreadPct !== null &&
+      spreadPct !== undefined &&
+      spreadPct < spreadCap;
 
     const hardGates = [
       { id: 'h_cd', passed: !recentLossSameDirection, text: `COOLDOWN: Không nhồi lệnh cùng hướng ${direction} sau khi bị SL.` },
       { id: 'h_spot_short', passed: tradeType !== 'SPOT' || direction === 'LONG', text: `SPOT DIRECTION: Không thể mở vị thế SHORT trên Spot.` },
-      { id: 'h1', passed: apiMacro.realSpreadPct < 0.3 && slTech > 0 && Math.abs(entry - slTech) > (autoData.atr14 * 0.4), text: `CHỐNG NHIỄU: Khoảng cách SL > 0.4 ATR` },
-      { id: 'h2', passed: parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR, h2_realized: h2Realized, text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
+      { id: 'h1', passed: spreadSafe && slTech > 0 && Math.abs(entry - slTech) > (autoData.atr14 * 0.4), text: `CHỐNG NHIỄU: SL > 0.4 ATR + spread < ${spreadCap}%` },
+      // P0-2 (critic): AND-gate khi realizedReady — realized EV binding,
+      // không escape qua cửa RR. n < 30 → hành vi cũ (OR plannedEV || RR).
+      { id: 'h2', passed: h2Realized !== null
+          ? (h2Realized > -0.05 && parseFloat(mathCore.theoreticalRR) >= requiredRR)
+          : (parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR),
+        h2_realized: h2Realized, text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
       { id: 'h4', passed: tradeType === 'SPOT' || (mathCore.liqEstimate && !mathCore.leverageExceedsExchangeCap && mathCore.liqSafetyMargin >= 1.3), text: `ĐỆM THANH LÝ: An toàn Margin` },
       { id: 'h6', passed: autoData.lastClosedVolume >= (autoData.avgVolume20 * 0.4), text: `VOL DEADZONE: Thanh khoản ổn định` },
       { id: 'h_msb', passed: !isMsbContradictory, text: `MARKET STRUCTURE: Cấm giao dịch khi cấu trúc MSB đảo chiều ngược hướng lệnh.` },
       
       // 🛡️ 4 LUẬT SINH TỒN MỚI TỪ INSIGHT DỮ LIỆU
       { id: 'h_vpin', passed: isVpinSafe, text: `TOXIC FLOW: Cấm giao dịch khi VPIN > 0.10, trừ chiến thuật có policy riêng.` },
+      // P1-1 (2026-08-13): funding dead zone SHORT — (0, 0.0045]% WR 25% n=20
+      // (CSV trade_logs_newest 2026-08-13: SHORT (0,0.0045] n=20 WR 0.250 avgR
+      // −0.129; funding<0 n=59 WR 0.508). Policy hook allowFundingDeadZone
+      // (mặc định false; CROWDED_CARRY_UNWIND KHÔNG set — disjoint: SHORT cần
+      // rank≤10 && funding≤0).
+      { id: 'h_funding_short',
+        passed: direction !== 'SHORT' || policy.allowFundingDeadZone === true
+                || !(autoData.fundingRate > 0 && autoData.fundingRate <= FUNDING_DEAD_ZONE_MAX_PCT),
+        text: `FUNDING DEADZONE: Cấm SHORT khi funding (0, ${FUNDING_DEAD_ZONE_MAX_PCT}]% — WR 25% n=20` },
       { id: 'h_range_block', passed: !isRangeRegime || rangeAllowed, text: `L1 RANGE BLOCK: Chỉ family mean-reversion được giao dịch trong Range.` },
       { id: 'h_liq_fresh', passed: hasFreshLiquidation, text: `LIQUIDATION FRESHNESS: Chiến thuật event chỉ dùng dữ liệu rolling 15 phút còn tươi.` },
       { id: 'h_cmf_breakout', passed: !(l3Str.includes('Break') && !isCmfAligned), text: `CMF BREAKOUT: Cấm đánh Breakout/Breakdown khi dòng tiền CMF không đồng thuận.` },

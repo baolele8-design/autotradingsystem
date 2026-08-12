@@ -51,7 +51,16 @@ export const costDrag = (
   const entryFee = entryExecution === 'MARKET' ? takerFee : makerFee;
   const exitSlippage = exitExecution === 'MARKET' ? 0.001 : 0;
   const exitFee = exitExecution === 'MARKET' ? takerFee : makerFee;
-  const spreadCost = finiteOr(spreadPercent, 0) / 100 / 2;
+  // P1-2 (2026-08-13): spreadPercent null/undefined (thiếu bookTick — scanner
+  // realSpreadPct giờ trả null) → dùng spread mặc định TỐI ĐA 0.10% (cap Tier 4,
+  // fail-closed) thay vì 0 — trước đây null → cost 0 → theoreticalRR phồng.
+  // Lưu ý: finiteOr(null, x) trả 0 (Number(null)=0 finite) nên phải null-check
+  // tường minh TRƯỚC finiteOr. spread 0 THẬT vẫn là 0 (không phải missing).
+  const spreadCost = (
+    spreadPercent === null || spreadPercent === undefined
+      ? 0.10
+      : finiteOr(spreadPercent, 0.10)
+  ) / 100 / 2;
   const totalHoldingHours =
     finiteOr(holdingCycles, 1) * (INTERVAL_HOURS[interval] || 1);
   const fundingCycles = totalHoldingHours / 8;
@@ -260,6 +269,9 @@ export const dynamicAsymmetricTargets = (
     minScore: profile.minScore,
     routeDiagnostics: selected.diagnostics,
     isFallback: selected.isFallback,
+    // P1-2 (2026-08-13): trả assetTier để TradeValidator h1 áp spread cap
+    // theo tier (targetInfo được truyền làm strategy vào evaluateGates).
+    assetTier,
     modelApplied: learnedModelApplied,
     modelSampleSize: learnedModelApplied
       ? finiteOr(targetModel.sample_size, 0)
@@ -303,10 +315,15 @@ export const classifyAssetTier = (
 ) => {
   const tier1Macros = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
   if (tier1Macros.includes(symbol)) return 'Tier 1: Macro';
-  if (usdVolume24h >= 30_000_000 && realSpreadPct <= 0.015) {
+  // P1-2 (2026-08-13): null/undefined spread (thiếu bookTick) → KHÔNG nâng
+  // tier. Trước đây `null <= 0.015` coerce 0 → TRUE → Tier 2 fail-open.
+  // NaN cũng không nâng (NaN <= x = false).
+  const spreadAvailable =
+    realSpreadPct !== null && realSpreadPct !== undefined;
+  if (usdVolume24h >= 30_000_000 && spreadAvailable && realSpreadPct <= 0.015) {
     return 'Tier 2: Liquid Majors';
   }
-  if (usdVolume24h >= 8_000_000 && realSpreadPct <= 0.040) {
+  if (usdVolume24h >= 8_000_000 && spreadAvailable && realSpreadPct <= 0.040) {
     return 'Tier 3: Mid-Cap Equities';
   }
   return 'Tier 4: Nano/High-Risk';

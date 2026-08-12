@@ -1851,3 +1851,248 @@ test('BTC BREAK CAP foreign stop: SL không thuộc engine → skip, không canc
     console.log = originalLog;
   }
 });
+
+// =====================================================================
+// P0-1 (2026-08-13): high-water freeze khi stream stale — fix + staleness-bound
+// Bug: hasFreshStreamPrice=false → observedHighWater = persisted (freeze mãi),
+// nên lệnh LOCK/TRAIL đạt +1.8R khi stream chết vẫn bị time-barrier ép đóng
+// ở rawMaxCycles (không được ×1.25 extension).
+// Fix: stale → advance bằng position.markPrice fallback NHƯNG chỉ khi
+// positionRisk age ≤ 30s; quá hạn hoặc markPrice NaN → fail-closed giữ persisted.
+// =====================================================================
+function staleHighWaterHarness({ markPrice, advanceClockDuringPositionRisk = 0, markPriceCacheAt, positionMarkPrice, protectionStage = 'TRAIL' }) {
+  const now = Date.now();
+  const updates = [];
+  const trade = {
+    id: 'trade-p01',
+    symbol: 'ETHUSDT',
+    direction: 'LONG',
+    status: 'OPEN',
+    type: 'FUTURES',
+    entry: 100,
+    sl: 95,
+    initial_risk_per_coin: 5,
+    interval: '5m',
+    opened_at: new Date(now - 11 * 300000).toISOString(),
+    created_at: new Date(now - 11 * 300000).toISOString(),
+    protection_stage: protectionStage,
+    high_water_price: 100,
+    high_water_r: 0,
+    holding_cycles: 10,
+    planned_holding_cycles: 10,
+    strategy_name: 'ADAPTIVE_LONG_FALLBACK',
+    asset_tier: 'Tier 2'
+  };
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({ data: [trade], error: null })
+        })
+      }),
+      update: values => ({
+        eq: async () => {
+          updates.push(values);
+          return { error: null };
+        }
+      })
+    })
+  };
+  const position = {
+    symbol: 'ETHUSDT',
+    positionAmt: '1',
+    entryPrice: '100',
+    markPrice: positionMarkPrice,
+    positionSide: 'BOTH'
+  };
+  const sentRequests = [];
+  let mockNow = now;
+  const { runSmartTrailingEngine } = createProtectionService({
+    getCurrentAiModel: () => null,
+    now: () => mockNow,
+    markPriceCache: new Map([
+      ['ETHUSDT', { price: 100, high: 100, low: 100, updatedAt: markPriceCacheAt }]
+    ]),
+    safeFetch: async () => ({
+      symbols: [{ symbol: 'ETHUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.1' }] }]
+    }),
+    readBinanceReq: async (endpoint, _params) => {
+      if (endpoint === '/fapi/v2/positionRisk') {
+        mockNow += advanceClockDuringPositionRisk;
+        return [position];
+      }
+      if (endpoint === '/fapi/v1/openOrders') return [];
+      if (endpoint === '/fapi/v1/openAlgoOrders') return [];
+      if (endpoint === '/fapi/v1/algoOrder') return { algoId: 12, algoStatus: 'NEW' };
+      return [];
+    },
+    sendBinanceReq: async (method, endpoint, params) => {
+      sentRequests.push({ method, endpoint, params });
+      if (method === 'POST' && endpoint === '/fapi/v1/algoOrder') {
+        return { data: { algoId: 12 } };
+      }
+      return { data: {} };
+    },
+    supabase
+  });
+  return { runSmartTrailingEngine, updates, sentRequests };
+}
+
+const isMarketClose = r => r.method === 'POST' && r.endpoint === '/fapi/v1/order';
+
+test('P0-1 (a): stale stream + positionRisk fresh + markPrice +1.8R → high-water advance → extension ×1.25 áp dụng (không ép đóng)', async () => {
+  const now = Date.now();
+  const { runSmartTrailingEngine, updates, sentRequests } = staleHighWaterHarness({
+    markPriceCacheAt: now - 6000, // stream stale > 5s
+    positionMarkPrice: '109' // entry 100 + 1.8R × risk 5 = 109
+  });
+
+  await runSmartTrailingEngine();
+
+  // observedHighWater = max(100, 109) = 109 → highWaterR 1.8 ≥ 1.5 →
+  // maxHoldingCycles = round(10 × 1.25) = 13 > candlesPassed 11 → KHÔNG time-barrier
+  assert.ok(
+    updates.some(u => u.high_water_price === 109),
+    `high-water phải advance lên 109, updates=${JSON.stringify(updates)}`
+  );
+  assert.equal(
+    sentRequests.filter(isMarketClose).length,
+    0,
+    'không được ép đóng MARKET khi high-water đã advance (extension áp dụng)'
+  );
+  assert.ok(
+    !updates.some(u => u.status === 'CLOSED'),
+    'không được persist CLOSED'
+  );
+});
+
+test('P0-1 (b): stale + markPrice cao nhưng positionRisk age > 30s → freeze (không advance)', async () => {
+  const now = Date.now();
+  const { runSmartTrailingEngine, updates, sentRequests } = staleHighWaterHarness({
+    markPriceCacheAt: now - 6000,
+    positionMarkPrice: '109',
+    advanceClockDuringPositionRisk: 31000 // snapshot cũ hơn 30s
+  });
+
+  await runSmartTrailingEngine();
+
+  // Fail-closed: observedHighWater = persisted 100 → highWaterR 0 →
+  // maxHoldingCycles 10 → 11 ≥ 10 → TIME BARRIER ép đóng (MARKET close)
+  assert.ok(
+    !updates.some(u => u.high_water_price === 109),
+    `không được advance qua markPrice cũ, updates=${JSON.stringify(updates)}`
+  );
+  assert.ok(
+    sentRequests.some(isMarketClose),
+    'snapshot > 30s → freeze → time-barrier MARKET close phải xảy ra'
+  );
+});
+
+test('P0-1 (c): stale + position.markPrice NaN → fail-closed không crash, giữ persisted', async () => {
+  const now = Date.now();
+  const { runSmartTrailingEngine, updates, sentRequests } = staleHighWaterHarness({
+    markPriceCacheAt: now - 6000,
+    positionMarkPrice: 'abc' // NaN
+  });
+
+  await runSmartTrailingEngine(); // không throw
+
+  assert.ok(
+    !updates.some(u => u.high_water_price === 109),
+    'markPrice NaN → không advance'
+  );
+  assert.ok(
+    sentRequests.some(isMarketClose),
+    'markPrice NaN → freeze → time-barrier ép đóng'
+  );
+});
+
+test('P0-1 (d): stream tươi → cachedMark.high vẫn là nguồn high-water (hành vi cũ 100%)', async () => {
+  const now = Date.now();
+  const { runSmartTrailingEngine, updates, sentRequests } = staleHighWaterHarness({
+    markPriceCacheAt: now, // tươi
+    positionMarkPrice: '101' // position.markPrice thấp hơn — phải KHÔNG được dùng
+  });
+  // cachedMark.high cần là 109 để chứng minh nguồn: dùng harness khác vì fixture cố định high=100
+  const updates2 = [];
+  const trade = {
+    id: 'trade-p01d',
+    symbol: 'ETHUSDT',
+    direction: 'LONG',
+    status: 'OPEN',
+    type: 'FUTURES',
+    entry: 100,
+    sl: 95,
+    initial_risk_per_coin: 5,
+    interval: '5m',
+    opened_at: new Date(now - 11 * 300000).toISOString(),
+    created_at: new Date(now - 11 * 300000).toISOString(),
+    protection_stage: 'TRAIL',
+    high_water_price: 100,
+    high_water_r: 0,
+    holding_cycles: 10,
+    planned_holding_cycles: 10,
+    strategy_name: 'ADAPTIVE_LONG_FALLBACK',
+    asset_tier: 'Tier 2'
+  };
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({ data: [trade], error: null })
+        })
+      }),
+      update: values => ({
+        eq: async () => {
+          updates2.push(values);
+          return { error: null };
+        }
+      })
+    })
+  };
+  const position = {
+    symbol: 'ETHUSDT',
+    positionAmt: '1',
+    entryPrice: '100',
+    markPrice: '101',
+    positionSide: 'BOTH'
+  };
+  const sentRequests2 = [];
+  const { runSmartTrailingEngine: runFresh } = createProtectionService({
+    getCurrentAiModel: () => null,
+    markPriceCache: new Map([
+      ['ETHUSDT', { price: 109, high: 109, low: 100, updatedAt: now }]
+    ]),
+    safeFetch: async () => ({
+      symbols: [{ symbol: 'ETHUSDT', filters: [{ filterType: 'PRICE_FILTER', minPrice: '0', tickSize: '0.1' }] }]
+    }),
+    readBinanceReq: async (endpoint) => {
+      if (endpoint === '/fapi/v2/positionRisk') return [position];
+      if (endpoint === '/fapi/v1/openOrders') return [];
+      if (endpoint === '/fapi/v1/openAlgoOrders') return [];
+      if (endpoint === '/fapi/v1/algoOrder') return { algoId: 12, algoStatus: 'NEW' };
+      return [];
+    },
+    sendBinanceReq: async (method, endpoint, params) => {
+      sentRequests2.push({ method, endpoint, params });
+      if (method === 'POST' && endpoint === '/fapi/v1/algoOrder') {
+        return { data: { algoId: 12 } };
+      }
+      return { data: {} };
+    },
+    supabase
+  });
+
+  await runFresh();
+
+  // cachedMark.high = 109 (position.markPrice chỉ 101) → advance 109 từ cachedMark
+  assert.ok(
+    updates2.some(u => u.high_water_price === 109),
+    `stream tươi phải advance bằng cachedMark.high (109), updates=${JSON.stringify(updates2)}`
+  );
+  assert.equal(
+    sentRequests2.filter(isMarketClose).length,
+    0,
+    'không ép đóng khi stream tươi'
+  );
+});
