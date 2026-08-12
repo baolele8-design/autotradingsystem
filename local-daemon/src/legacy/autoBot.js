@@ -201,6 +201,26 @@ const processSignals = async (topSetups) => {
         console.log(`   ├─ Điểm yếu (Dưới ${CONFIG.minScore}đ): ${filterStats.lowScore}`);
         console.log(`   ├─ Chiến thuật mới PAPER/SHADOW (không gửi lệnh thật): ${filterStats.paperOnly}`);
         console.log(`   └─ LỌT QUA CỬA BẢO VỆ: ${filterStats.passed} Tín hiệu cực sắc.`);
+        // F-E1a (2026-08-12): per-interval breakdown — đóng vòng đo scanner→bot
+        // (nghi phạm 15m: score-ranking/positionCap phía bot). Shadow measurement.
+        const intervalBuckets = Object.entries(filterStats.byInterval || {});
+        if (intervalBuckets.length > 0) {
+            console.log(`   [BỘ LỌC BOT] Theo khung thời gian:`);
+            for (const [iv, bucket] of intervalBuckets) {
+                const notes = [
+                    `passed ${bucket.passed}`,
+                    `lowScore ${bucket.lowScore}`,
+                    `positionCap ${bucket.positionCap}`,
+                    `duplicate ${bucket.duplicate}`,
+                    `cooldown ${bucket.cooldown}`,
+                    `badInterval ${bucket.badInterval}`,
+                    `btcGate ${bucket.btcRegimeBlocked}`,
+                    `paperOnly ${bucket.paperOnly}`,
+                    `notFutures ${bucket.notFutures}`
+                ];
+                console.log(`   └─ [${iv}] ${notes.join(' | ')}`);
+            }
+        }
 
         if (validSetups.length === 0) {
             console.log(`💤 Không có tín hiệu nào đủ tiêu chuẩn sát thủ. Bot tiếp tục ngủ...`);

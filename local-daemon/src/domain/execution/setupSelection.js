@@ -38,7 +38,27 @@ export function selectExecutableSetups(
     notFutures: 0,
     paperOnly: 0,
     passed: 0,
-    positionCap: 0
+    positionCap: 0,
+    // F-E1a (2026-08-12): per-interval breakdown (shadow measurement only)
+    // — keys mirror the global counters above, keyed by setup.interval.
+    byInterval: {}
+  };
+  // F-E1a: increment both the global counter and the per-interval bucket.
+  const intervalKeys = [
+    'badInterval', 'blockedSymbol', 'btcRegimeBlocked', 'cooldown',
+    'duplicate', 'invalid', 'lowScore', 'notFutures', 'paperOnly',
+    'passed', 'positionCap'
+  ];
+  const bump = (key, setup) => {
+    filterStats[key] += 1;
+    const interval = String(setup?.interval || 'unknown');
+    let bucket = filterStats.byInterval[interval];
+    if (!bucket) {
+      bucket = {};
+      for (const bucketKey of intervalKeys) bucket[bucketKey] = 0;
+      filterStats.byInterval[interval] = bucket;
+    }
+    bucket[key] += 1;
   };
   const validSetups = [];
   const btcGateBlocked = [];
@@ -50,18 +70,18 @@ export function selectExecutableSetups(
   for (const setup of rankedSetups) {
     const symbol = String(setup?.symbol || '').trim().toUpperCase();
     if (!symbol) {
-      filterStats.invalid += 1;
+      bump('invalid', setup);
       continue;
     }
     if (!isNewEntrySymbolAllowed(symbol)) {
-      filterStats.blockedSymbol += 1;
+      bump('blockedSymbol', setup);
       continue;
     }
     if (
       setup.executionMode === 'PAPER_ONLY' ||
       setup.rolloutMode === 'PAPER_ONLY'
     ) {
-      filterStats.paperOnly += 1;
+      bump('paperOnly', setup);
       continue;
     }
     const btcGate = evaluateBtcEntryGate({
@@ -71,40 +91,40 @@ export function selectExecutableSetups(
       symbol
     });
     if (btcGate.blocked) {
-      filterStats.btcRegimeBlocked += 1;
+      bump('btcRegimeBlocked', setup);
       btcGateBlocked.push({ ...setup, symbol, ...btcGate });
       continue;
     }
     if (!allowedIntervals.includes(setup.interval)) {
-      filterStats.badInterval += 1;
+      bump('badInterval', setup);
       continue;
     }
     if (alreadyOccupied.has(symbol)) {
-      filterStats.duplicate += 1;
+      bump('duplicate', setup);
       continue;
     }
     if (numeric(setup.score) < minScore) {
-      filterStats.lowScore += 1;
+      bump('lowScore', setup);
       continue;
     }
     if (setup.tradeType !== 'FUTURES') {
-      filterStats.notFutures += 1;
+      bump('notFutures', setup);
       continue;
     }
 
     const lastFiredTime = numeric(actionCooldowns.get(symbol));
     if (lastFiredTime > 0 && now - lastFiredTime < cooldownMs) {
-      filterStats.cooldown += 1;
+      bump('cooldown', setup);
       continue;
     }
     if (selectedSymbols.has(symbol)) {
-      filterStats.duplicate += 1;
+      bump('duplicate', setup);
       continue;
     }
 
     selectedSymbols.add(symbol);
     validSetups.push({ ...setup, symbol });
-    filterStats.passed += 1;
+    bump('passed', setup);
   }
 
   // CẮT CONCURRENCY: validSetups đã xếp hạng theo score giảm dần (rankedSetups
@@ -113,13 +133,13 @@ export function selectExecutableSetups(
   const strategyCounts = new Map();
   for (const setup of validSetups) {
     if (cappedSetups.length >= maxOpenPositions) {
-      filterStats.positionCap += 1;
+      bump('positionCap', setup);
       continue;
     }
     const strategyKey = String(setup.strategyId || 'DEFAULT');
     const strategyCount = strategyCounts.get(strategyKey) || 0;
     if (strategyCount >= maxOpenPerStrategy) {
-      filterStats.positionCap += 1;
+      bump('positionCap', setup);
       continue;
     }
     strategyCounts.set(strategyKey, strategyCount + 1);

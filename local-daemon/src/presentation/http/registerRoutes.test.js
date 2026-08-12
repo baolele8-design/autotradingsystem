@@ -4,6 +4,9 @@ import {
   registerRoutes,
   validateLiveExecutionStrategy
 } from './registerRoutes.js';
+import {
+  buildBtcRegimeSnapshot
+} from '../../domain/execution/btcRegimeFrame.js';
 
 const makeRequest = (overrides = {}) => ({
   strategyId: 'ADAPTIVE_LONG_FALLBACK',
@@ -338,4 +341,35 @@ test('GET /api/btc-regime fails open when snapshot getter is absent', async () =
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.success, true);
   assert.equal(response.body.data, null);
+});
+
+// F-E1b (2026-08-12): GET /api/btc-regime regression with an OBJECT regime
+// cache (scanner stores {regime, msbState, ...} now) — the snapshot must
+// read .regime and keep returning plain regime strings.
+test('GET /api/btc-regime reads .regime from object cache entries', async () => {
+  const handlers = new Map();
+  registerRoutes({
+    app: {
+      get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      post: () => {},
+      delete: () => {}
+    },
+    getBtcRegimeSnapshot: () => buildBtcRegimeSnapshot({
+      regimeCache: new Map([
+        ['4h', { regime: 'Downtrend', msbState: 'Bearish_MSB', isSFP: null }],
+        ['1d', { regime: 'Uptrend', msbState: 'Bullish_MSB', isSFP: null }]
+      ]),
+      domCache: new Map([['4h', { slope: 0.42 }], ['1d', { slope: -0.1 }]]),
+      btcDominance: 58.5
+    })
+  });
+  const response = {
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return body; }
+  };
+  await handlers.get('GET /api/btc-regime')({}, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.data.regime4h, 'Downtrend');
+  assert.equal(response.body.data.regime1d, 'Uptrend');
+  assert.equal(response.body.data.isAltcoinBleeding, true);
 });

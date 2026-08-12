@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { selectExecutableSetups } from './setupSelection.js';
@@ -171,4 +171,66 @@ test('unknown BTC regime passes the gate with a warn flag', () => {
 
   assert.equal(result.filterStats.btcRegimeBlocked, 0);
   assert.equal(result.validSetups.length, 1);
+});
+
+// F-E1a (2026-08-12): per-interval breakdown in filterStats.byInterval
+// mirrors the global counters, keyed by setup.interval.
+test('F-E1a filterStats.byInterval breaks counters down per interval', () => {
+  const result = selectExecutableSetups(
+    [
+      live({ interval: '15m', score: 95 }),
+      live({ interval: '15m', score: 94, theoreticalRR: 2.5 }),
+      live({ interval: '15m', score: 10 }),
+      live({ interval: '1h', score: 40 }),
+      live({ interval: '4h', score: 80, rolloutMode: 'PAPER_ONLY' })
+    ],
+    { allowedIntervals: ['15m'], minScore: 50, now: 1_000_000 }
+  );
+
+  assert.equal(result.filterStats.duplicate, 1);
+  assert.equal(result.filterStats.lowScore, 1);
+  assert.equal(result.filterStats.badInterval, 1);
+  assert.equal(result.filterStats.paperOnly, 1);
+  assert.equal(result.filterStats.passed, 1);
+
+  const fifteen = result.filterStats.byInterval['15m'];
+  assert.equal(fifteen.duplicate, 1);
+  assert.equal(fifteen.lowScore, 1);
+  assert.equal(fifteen.passed, 1);
+  assert.equal(fifteen.badInterval, 0);
+  assert.equal(fifteen.paperOnly, 0);
+
+  // interval gate (badInterval) runs before the score gate — a 1h setup
+  // never reaches lowScore
+  const oneHour = result.filterStats.byInterval['1h'];
+  assert.equal(oneHour.badInterval, 1);
+  assert.equal(oneHour.lowScore, 0);
+  assert.equal(oneHour.passed, 0);
+
+  const fourHour = result.filterStats.byInterval['4h'];
+  assert.equal(fourHour.paperOnly, 1);
+  assert.equal(fourHour.passed, 0);
+});
+
+test('F-E1a positionCap lands in the per-interval bucket too', () => {
+  const symbols = [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+    'ADAUSDT', 'LINKUSDT', 'DOTUSDT', 'AVAXUSDT', 'LTCUSDT'
+  ];
+  const setups = symbols.map((symbol, index) =>
+    live({ symbol, score: 100 - index, interval: '15m' })
+  );
+
+  const result = selectExecutableSetups(setups, {
+    allowedIntervals: ['15m'],
+    minScore: 50,
+    now: 1_000_000,
+    maxOpenPositions: 5,
+    maxOpenPerStrategy: 10
+  });
+
+  assert.equal(result.filterStats.positionCap, 5);
+  assert.equal(result.filterStats.byInterval['15m'].positionCap, 5);
+  // passed counts setups that cleared the filters (cap runs afterwards)
+  assert.equal(result.filterStats.byInterval['15m'].passed, 10);
 });

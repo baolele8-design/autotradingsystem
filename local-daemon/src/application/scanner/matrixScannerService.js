@@ -2,6 +2,11 @@ import QuantMath from '../../../../src/domain/analytics/QuantMath.js';
 import {
   BTC_REGIME_FRAMES,
   resolveBtcRegime,
+  resolveBtcStructure,
+  classifyBtcBias,
+  createBtcBiasStats,
+  accumulateBtcBiasStats,
+  formatBtcBiasSummary,
   buildBtcRegimeSnapshot
 } from '../../domain/execution/btcRegimeFrame.js';
 import {
@@ -30,6 +35,21 @@ import {
 import {
   makeExitClientOrderId
 } from '../../domain/orders/trailingOrders.js';
+import {
+  createIntervalStats,
+  accumulateIntervalStats,
+  accumulateIntervalNearMiss,
+  accumulateIntervalMsbRouting,
+  selectLaneDropCounts,
+  formatIntervalSummary,
+  formatIntervalNearMiss,
+  formatIntervalMsbRouting
+} from './intervalRouterStats.js';
+import { computeStructureStop } from '../../domain/execution/structureStopPolicy.js';
+import {
+  findNearestResistance,
+  findNearestSupport
+} from '../../../../src/domain/analytics/quant/structureLevels.js';
 
 export function buildMarketDepthUrl(symbol) {
   return `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=500`;
@@ -255,6 +275,18 @@ export function createMatrixScannerService(context) {
       // R2 (2026-08-10): reset mỗi cycle — accumulate near-miss của candidates
       // không match; log 1 dòng tổng hợp cuối cycle (chống spam per-candidate).
       const nearMissStats = new Map();
+      // F-E1a (2026-08-12): interval-level routing measurement (shadow only).
+      const intervalStats = createIntervalStats();
+      // F-E1b (2026-08-12): per-cycle BTC bias distribution (shadow only).
+      const btcBiasStats = createBtcBiasStats();
+      // F-E2b (2026-08-12): per-cycle SL structure LIVE counters — đo hiệu
+      // ứng thật (slTech đã wire vào structure stop khi applied='STRUCTURE').
+      const slShadowStats = {
+          routed: 0,
+          wouldTighten: 0,
+          tighteningAtrSum: 0,
+          sizeDeltaSum: 0
+      };
 
       // O10: closure caches are per-cycle, snapshot getter reads latest cycle.
       btcDomCache.clear();
@@ -288,6 +320,7 @@ export function createMatrixScannerService(context) {
           const bookMap = new Map((bookTickerAll || []).map(i => [i.symbol, i]));
   
           const minNotionalMap = new Map();
+          const tickSizeMap = new Map(); // F-E2a: PRICE_FILTER tickSize cho structure shadow buffer (2*tickSize)
           const matureSymbols = new Set(); // BỘ LỌC TUỔI ĐỜI COIN
           const legacySymbols = new Set();
           const MATURE_AGE_MS = 730 * 24 * 60 * 60 * 1000; // Yêu cầu coin phải sống sót ít nhất 2 năm
@@ -313,6 +346,16 @@ export function createMatrixScannerService(context) {
                   if (sym.onboardDate) {
                       if ((nowMs - sym.onboardDate) > MATURE_AGE_MS) matureSymbols.add(sym.symbol);
                       if ((nowMs - sym.onboardDate) > LEGACY_AGE_MS) legacySymbols.add(sym.symbol);
+                  }
+
+                  // 3. Thu thập tick size (PRICE_FILTER) cho structure shadow
+                  // buffer max(0.05*ATR, 2*tickSize) — structureStopPolicy.js.
+                  const priceFilter = sym.filters.find(f => f.filterType === 'PRICE_FILTER');
+                  if (priceFilter && priceFilter.tickSize) {
+                      const tick = parseFloat(priceFilter.tickSize);
+                      if (Number.isFinite(tick) && tick > 0) {
+                          tickSizeMap.set(sym.symbol, tick);
+                      }
                   }
               });
           }
@@ -413,9 +456,23 @@ btcReturnsCache.clear();
                        lows,
                        closes
                    );
+                   // F-E1b (2026-08-12): cache stores the full structure
+                   // (regime + MSB + SFP + swing levels) — null-guarded for
+                   // the early-return shape (regime 'Sideways', msbState
+                   // 'None', key 'sfp' missing lastSL/lastSH, indicators.js:
+                   // 354-360). isSFP is a STRING ('Bearish_SFP'/'Bullish_SFP')
+                   // or falsy — normalized to string|null here.
                    btcRegimeCache.set(
                        interval,
-                       btcStructure?.regime || null
+                       {
+                           regime: btcStructure?.regime ?? null,
+                           msbState: btcStructure?.msbState ?? null,
+                           isSFP: typeof btcStructure?.isSFP === 'string'
+                               ? btcStructure.isSFP
+                               : null,
+                           lastSL: btcStructure?.lastSL ?? null,
+                           lastSH: btcStructure?.lastSH ?? null
+                       }
                    );
                } else {
                    btcRegimeCache.set(interval, null);
@@ -737,7 +794,19 @@ btcReturnsCache.clear();
                               btcDomValue,
                               btcDomSlope,
                               macd: macdValue,
-                              msbRegime: msbData.regime, msbState: msbData.msbState, msbIsSFP: msbData.isSFP
+                              msbRegime: msbData.regime, msbState: msbData.msbState, msbIsSFP: msbData.isSFP,
+                              // F-E2a (2026-08-12): swing structure plumbing for
+                              // the SL structure SHADOW — null-guarded for the
+                              // detectMarketStructure early-return shape
+                              // (missing lastSL/lastSH, indicators.js:354-360).
+                              msbLastSL: msbData.lastSL ?? null,
+                              msbLastSH: msbData.lastSH ?? null,
+                              msbSwingAgeLong: msbData.lastSL
+                                  ? closes.length - 1 - msbData.lastSL.index
+                                  : null,
+                              msbSwingAgeShort: msbData.lastSH
+                                  ? closes.length - 1 - msbData.lastSH.index
+                                  : null
                           };
                           autoData.liquidityFeatureMetadata =
                               createLiquidityFeatureMetadata(autoData);
@@ -993,6 +1062,16 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               // (tránh tính 2 lần + không phá API hiện có).
                               const allCandidates = evaluateStrategyCandidates(routeInput);
                               accumulateNearMiss(allCandidates, nearMissStats);
+                              // F-E1a: per-interval near-miss (shadow only) —
+                              // same first-failure-layer classification.
+                              for (const candidate of allCandidates || []) {
+                                  if (candidate?.diagnostics && !candidate.diagnostics.matched) {
+                                      accumulateIntervalNearMiss(intervalStats, {
+                                          interval,
+                                          diagnostics: candidate.diagnostics
+                                      });
+                                  }
+                              }
                               const primaryStrategy = routeStrategy(routeInput, { candidates: allCandidates });
                               // Shadow strategies are evaluated beside, not instead
                               // of, the existing live Adaptive lane.
@@ -1038,6 +1117,57 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               };
                               routeStats.routed += 1;
                               strategyDiagnostics.set(strategyId, routeStats);
+                              // F-E1a: per-interval routed counter (shadow only).
+                              accumulateIntervalStats(intervalStats, {
+                                  interval,
+                                  routedDelta: 1
+                              });
+
+                              // F-E1b (2026-08-12): fixed-frame BTC structure
+                              // + 2-frame bias (payload + shadow only; never
+                              // changes the live btcRegime string contract).
+                              const btcStruct4h = resolveBtcStructure(btcRegimeCache, '4h');
+                              const btcStruct1d = resolveBtcStructure(btcRegimeCache, '1d');
+                              const btcRegime4h = btcStruct4h?.regime ?? null;
+                              const btcRegime1d = btcStruct1d?.regime ?? null;
+                              const btcBias = classifyBtcBias({
+                                  direction,
+                                  regime4h: btcRegime4h,
+                                  regime1d: btcRegime1d
+                              });
+                              accumulateBtcBiasStats(btcBiasStats, {
+                                  direction,
+                                  regime4h: btcRegime4h,
+                                  regime1d: btcRegime1d
+                              });
+
+                              // F-E3 (2026-08-12): TP/MSB shadow payload —
+                              // nearest swing levels + MSB alignment, using
+                              // the EXACT strategyRouter.js:338-343 mapping
+                              // (LONG+Bullish_MSB, SHORT+Bearish_MSB). Never
+                              // changes tp1 (line: tp1 stays tpMult*ATR).
+                              const resistanceNear = findNearestResistance(
+                                  highs,
+                                  closes,
+                                  suggestedEntry,
+                                  { lookback: 40, atr: atr14 }
+                              );
+                              const supportNear = findNearestSupport(
+                                  lows,
+                                  closes,
+                                  suggestedEntry,
+                                  { lookback: 40, atr: atr14 }
+                              );
+                              const msbIsSFP = Boolean(msbData.isSFP);
+                              const btcMsbAligned = direction === 'LONG'
+                                  ? msbData.msbState === 'Bullish_MSB'
+                                  : msbData.msbState === 'Bearish_MSB';
+                              accumulateIntervalMsbRouting(intervalStats, {
+                                  interval,
+                                  aligned: btcMsbAligned,
+                                  misaligned: !btcMsbAligned,
+                                  sfpAtEntry: msbIsSFP
+                              });
 
                               const baseSystemScore = TradeValidator.evaluateScore(
                                   autoData,
@@ -1056,8 +1186,69 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                   )
                               };
 
-                              const slTech = direction === 'LONG' ? suggestedEntry - (slMult * atr14) : suggestedEntry + (slMult * atr14);
+                              // F-E2b (2026-08-12): ATR-baseline stop — sizing
+                              // LUÔN dùng distance ATR này (notional không tăng
+                              // khi SL thật chặt hơn). slTech thật được quyết
+                              // định sau computeStructureStop (STRUCTURE|ATR).
+                              const slTechAtr = direction === 'LONG' ? suggestedEntry - (slMult * atr14) : suggestedEntry + (slMult * atr14);
                               const tp1 = direction === 'LONG' ? suggestedEntry + (tpMult * atr14) : suggestedEntry - (tpMult * atr14);
+                              const riskDiffTechAtr = Math.abs(suggestedEntry - slTechAtr);
+
+                              // F-E2a (2026-08-12): SL structure SHADOW — computes
+                              // what the stop WOULD be off the last swing level.
+                              // NEVER replaces slTech/riskDiffTech/size.
+                              const slStructShadow = computeStructureStop({
+                                  direction,
+                                  entry: suggestedEntry,
+                                  atr: atr14,
+                                  slDistanceAtr: slMult,
+                                  // F-E2a fix (2026-08-12): wire PRICE_FILTER
+                                  // tickSize from exchangeInfo so the shadow
+                                  // buffer uses max(0.05*ATR, 2*tickSize);
+                                  // missing tick -> policy falls back to 0.05*ATR.
+                                  tickSize: tickSizeMap.get(symbol),
+                                  lastSL: autoData.msbLastSL ?? null,
+                                  lastSH: autoData.msbLastSH ?? null,
+                                  swingAge: direction === 'LONG'
+                                      ? autoData.msbSwingAgeLong
+                                      : autoData.msbSwingAgeShort,
+                                  adx,
+                                  msbRegime: msbData.regime,
+                                  msbState: msbData.msbState
+                              });
+                              slShadowStats.routed += 1;
+                              if (slStructShadow.applied === 'STRUCTURE') {
+                                  slShadowStats.wouldTighten += 1;
+                                  const tighteningAtr = atr14 > 0
+                                      ? Math.abs(slStructShadow.slAtr - slStructShadow.slStruct) / atr14
+                                      : 0;
+                                  slShadowStats.tighteningAtrSum += tighteningAtr;
+                                  if (slStructShadow.slAtr > 0) {
+                                      const sizeDelta = (slStructShadow.distance / slStructShadow.slAtr) - 1;
+                                      slShadowStats.sizeDeltaSum += sizeDelta;
+                                  }
+                                  console.log(
+                                      `[SL STRUCTURE LIVE] ${symbol} ${interval} ${direction}: ` +
+                                      `${slStructShadow.slAtr.toFixed(4)} -> ${slStructShadow.stopPrice.toFixed(4)} ` +
+                                      `(${slStructShadow.reason}${slStructShadow.momentumSource ? ' ' + slStructShadow.momentumSource : ''})`
+                                  );
+                              }
+
+                              // F-E2b (2026-08-12): SL structure LIVE — khi
+                              // computeStructureStop applied='STRUCTURE' (level
+                              // hợp lệ + momentum gate pass + không quá chặt),
+                              // slTech THẬT = structure stop (chặt hơn ATR-SL).
+                              // Ngược lại fail-open: giữ slTechAtr. riskDiffTech
+                              // tính theo SL thật → theoreticalRR tăng; sizing
+                              // giữ ATR-baseline (riskDiffTechAtr) nên notional
+                              // KHÔNG tăng, risk thực giảm (owner decision
+                              // 2026-08-12 + ref 02_money_management.md:20-23).
+                              const slApplied = slStructShadow.applied === 'STRUCTURE'
+                                  ? 'STRUCTURE'
+                                  : 'ATR';
+                              const slTech = slApplied === 'STRUCTURE'
+                                  ? slStructShadow.stopPrice
+                                  : slTechAtr;
                               const riskDiffTech = Math.abs(suggestedEntry - slTech);
   
                               let cRegime = 1.0
@@ -1089,7 +1280,10 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               const isCompressed = l2 === 'Compression' || autoData.bbwRank < 20;
                               const effectiveAtrPercent = isCompressed ? Math.max(autoData.atrPercent, minSafeAtr * 100) * 1.5 : autoData.atrPercent;
                               const slippageBuffer = suggestedEntry * (effectiveAtrPercent / 100) * cRegime * sessionMultiplier; 
-                              const sizeSlDistance = riskDiffTech + slippageBuffer; 
+                              // F-E2b: sizing dùng ATR-baseline distance (không
+                              // co theo structure stop) → positionSizeUSD giữ
+                              // baseline, risk thực giảm vì SL thật chặt hơn.
+                              const sizeSlDistance = riskDiffTechAtr + slippageBuffer; 
   
                               let slPercentForSize = sizeSlDistance / suggestedEntry;
                               if (!isFinite(slPercentForSize) || isNaN(slPercentForSize) || slPercentForSize === 0) slPercentForSize = 0.01;
@@ -1183,10 +1377,21 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                       routeStats.rejectedByGate.min_score =
                                           (routeStats.rejectedByGate.min_score || 0) + 1;
                                   }
+                                  // F-E1a: per-interval rejection breakdown (shadow only).
+                                  accumulateIntervalStats(intervalStats, {
+                                      interval,
+                                      rejectedGates: gates.hardGates.filter(gate => !gate.passed).map(gate => gate.id),
+                                      minScoreFailed: gates.softScore < gates.passingScore
+                                  });
                               }
                               
                               if (gates.isApproved) {
                                   routeStats.approved += 1;
+                                  // F-E1a: per-interval approved counter (shadow only).
+                                  accumulateIntervalStats(intervalStats, {
+                                      interval,
+                                      approvedDelta: 1
+                                  });
                                   intervalCandidates.push({
                                       // DỮ LIỆU THỰC THI (Cho Binance)
                                       symbol, interval, direction, assetTier, tradeType: finalTradeType,
@@ -1199,6 +1404,45 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                       strategyVersion: targetInfo.strategyVersion,
 btcRegime:
                                           resolveBtcRegime(btcRegimeCache, interval),
+                                      // F-E1b (2026-08-12): shadow payload —
+                                      // fixed-frame structure + 2-frame bias.
+                                      // btcRegime (string) stays untouched for
+                                      // R2/bot compatibility.
+                                      btcStructure4h: btcStruct4h
+                                          ? { regime: btcStruct4h.regime, msbState: btcStruct4h.msbState }
+                                          : null,
+                                      btcStructure1d: btcStruct1d
+                                          ? { regime: btcStruct1d.regime, msbState: btcStruct1d.msbState }
+                                          : null,
+                                      btcBias,
+                                      btcBias4h: btcRegime4h,
+                                      btcBias1d: btcRegime1d,
+                                      // F-E2a/F-E2b (2026-08-12): SL structure —
+                                      // slStructShadow là telemetry (structure
+                                      // stop đề xuất); slApplied cho biết SL thật
+                                      // đang dùng ('STRUCTURE'|'ATR'); slSizingDistance
+                                      // là ATR-baseline distance dùng cho sizing.
+                                      slStructShadow: {
+                                          slStruct: slStructShadow.stopPrice,
+                                          slAtr: slStructShadow.slAtr,
+                                          applied: slStructShadow.applied,
+                                          reason: slStructShadow.reason,
+                                          bufferUsed: slStructShadow.bufferUsed
+                                      },
+                                      slApplied,
+                                      slSizingDistance: riskDiffTechAtr,
+                                      // F-E3 (2026-08-12): TP/MSB shadow payload.
+                                      resistanceNear: resistanceNear
+                                          ? { price: resistanceNear.price, index: resistanceNear.index, distAtr: resistanceNear.distAtr }
+                                          : null,
+                                      supportNear: supportNear
+                                          ? { price: supportNear.price, index: supportNear.index, distAtr: supportNear.distAtr }
+                                          : null,
+                                      tp1DistAtr: atr14 > 0 ? rewardDiff1 / atr14 : null,
+                                      msbIsSFP,
+                                      msbRegime: msbData.regime ?? null,
+                                      msbState: msbData.msbState ?? null,
+                                      btcMsbAligned,
                                       rolloutMode: targetInfo.rolloutMode,
                                       executionMode: targetInfo.executionMode,
                                       strategyPriority: routedStrategy.priority,
@@ -1316,11 +1560,21 @@ btcRegime:
                           if (intervalCandidates.length > 0) {
                               // Keep one winner per execution lane. A shadow
                               // match must never suppress a valid live setup.
-                              topSetups.push(
-                                  ...selectStrategyLaneWinners(
-                                      intervalCandidates
-                                  )
+                              const laneWinners = selectStrategyLaneWinners(
+                                  intervalCandidates
                               );
+                              topSetups.push(...laneWinners);
+                              // F-E1a: per-interval lane-drop measurement (shadow only).
+                              const laneDropped = selectLaneDropCounts(
+                                  intervalCandidates,
+                                  laneWinners
+                              );
+                              for (const [dropInterval, dropCount] of Object.entries(laneDropped)) {
+                                  accumulateIntervalStats(intervalStats, {
+                                      interval: dropInterval,
+                                      laneDropped: dropCount
+                                  });
+                              }
                           }
                       } catch (err) {
                           // Log ra terminal của VSCode/Node.js để track lỗi
@@ -1361,6 +1615,29 @@ btcRegime:
           console.log(`[STRATEGY ROUTER] approved/routed — ${routerSummary || 'no candidates'}`);
           const nearMissLine = formatNearMissLine(nearMissStats);
           if (nearMissLine) console.log(nearMissLine);
+          // F-E1a (2026-08-12): interval-level routing summary + near-miss
+          // (shadow only, đo lường nghi phạm 15m scanner→bot).
+          const intervalSummaryLine = formatIntervalSummary(intervalStats);
+          if (intervalSummaryLine) console.log(intervalSummaryLine);
+          const intervalNearMissLine = formatIntervalNearMiss(intervalStats);
+          if (intervalNearMissLine) console.log(intervalNearMissLine);
+          // F-E3 (2026-08-12): per-interval MSB alignment shadow.
+          const msbRoutingLine = formatIntervalMsbRouting(intervalStats);
+          if (msbRoutingLine) console.log(msbRoutingLine);
+          // F-E1b (2026-08-12): BTC bias distribution shadow (calibrate NEUTRAL rate).
+          const btcBiasLine = formatBtcBiasSummary(btcBiasStats);
+          if (btcBiasLine) console.log(btcBiasLine);
+          // F-E2b (2026-08-12): SL structure LIVE cycle summary — counters
+          // đo hiệu ứng THẬT (slTech đã wire), không còn shadow.
+          if (slShadowStats.wouldTighten > 0) {
+              const avgTighteningAtr = slShadowStats.tighteningAtrSum / slShadowStats.wouldTighten;
+              const avgSizeDelta = slShadowStats.sizeDeltaSum / slShadowStats.wouldTighten;
+              console.log(
+                  `[SL STRUCTURE LIVE] cycle: tightened ${slShadowStats.wouldTighten}/${slShadowStats.routed} ` +
+                  `avgTightening ${avgTighteningAtr.toFixed(2)} ATR ` +
+                  `impliedSizeDelta ${(avgSizeDelta * 100).toFixed(1)}%`
+              );
+          }
           getConnectedClients().forEach(client => { if (client.readyState === 1) client.send(JSON.stringify({ type: 'SCAN_RESULTS', data: topSetups, isNewSignal: topSetups.length > 0 })); });
           console.log(`[RADAR] Chu kỳ hoàn tất. Bắt được ${topSetups.length} Setups trên ${scanPool.length} Coins (${TARGET_INTERVALS.length} Khung).`);
       } catch (e) { console.error("[RADAR] Lỗi Engine Scanner:", e); }
