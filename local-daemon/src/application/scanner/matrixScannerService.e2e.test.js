@@ -40,8 +40,17 @@ function mockContext(overrides = {}) {
     readBinanceReq: async () => ({}),
     sendBinanceReq: async () => ({}),
     safeFetch: async () => ({}),
+    // P0-2 (2026-08-13): scanner query thêm trade_logs resolved (WIN/LOSS 90d)
+    // — mock phải chainable select→or→order như query thật.
     supabase: {
-      from: () => ({ select: async () => ({ data: [], error: null }) })
+      from: () => {
+        const chain = {
+          select: () => chain,
+          or: () => chain,
+          order: async () => ({ data: [], error: null })
+        };
+        return chain;
+      }
     },
     btcReturnsCache: new Map(),
     btcRegimeCache: new Map()
