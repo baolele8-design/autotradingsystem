@@ -51,7 +51,9 @@ export const resolveBtcStructure = (regimeCache, interval) => {
 // - frames disagree with each other, or agree but oppose the trade → MISALIGNED
 // - Range/Sideways (indicators.js:356 vs :390 use both spellings) or
 //   null/unknown regime → NEUTRAL
-const frameDirection = (regime) => {
+// Exported (2026-08-13) so mtfMatrix.js reuses it — the MTF MATRIX votes
+// must map regimes with the SAME rule, no duplicate implementation.
+export const frameDirection = (regime) => {
   if (regime === 'Uptrend') return 'UP';
   if (regime === 'Downtrend') return 'DOWN';
   return null; // Range, Sideways, null, unknown

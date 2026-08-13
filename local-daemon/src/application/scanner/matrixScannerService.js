@@ -54,6 +54,12 @@ import {
 } from './intervalRouterStats.js';
 import { computeStructureStop } from '../../domain/execution/structureStopPolicy.js';
 import {
+  evaluateMtfMatrix,
+  createMtfStats,
+  accumulateMtfStats,
+  formatMtfSummary
+} from '../../domain/execution/mtfMatrix.js';
+import {
   findNearestResistance,
   findNearestSupport
 } from '../../../../src/domain/analytics/quant/structureLevels.js';
@@ -286,6 +292,9 @@ export function createMatrixScannerService(context) {
       const intervalStats = createIntervalStats();
       // F-E1b (2026-08-12): per-cycle BTC bias distribution (shadow only).
       const btcBiasStats = createBtcBiasStats();
+      // MTF MATRIX (2026-08-13): per-cycle verdict distribution shadow —
+      // NEUTRAL rate + counterTrendEntry per-interval (payload/log only).
+      const mtfStats = createMtfStats();
       // F-E2b (2026-08-12): per-cycle SL structure LIVE counters — đo hiệu
       // ứng thật (slTech đã wire vào structure stop khi applied='STRUCTURE').
       const slShadowStats = {
@@ -698,6 +707,22 @@ btcReturnsCache.clear();
                           const isBullishSFP = QuantMath.detectSFP_Institutional_Advanced(highs, lows, closes, opens, baseVolumes, avgVolume20, atr14, 'LONG');
                           const isBearishSFP = QuantMath.detectSFP_Institutional_Advanced(highs, lows, closes, opens, baseVolumes, avgVolume20, atr14, 'SHORT');
                           const msbData = QuantMath.detectMarketStructure(highs, lows, closes);
+                          
+                          // MTF MATRIX (2026-08-13): bias/structure frames từ
+                          // klines MTF/HTF (ladder :571-576: mtfInterval = 1
+                          // bậc trên, htfInterval = 2 bậc trên). klines đã
+                          // được check >=30/>=4 tại :583 → chỉ tính khi đủ dữ
+                          // liệu; matrix là phụ (payload/log only).
+                          const msbBias = QuantMath.detectMarketStructure(
+                              klinesMTF.map(d => parseFloat(d[2])),
+                              klinesMTF.map(d => parseFloat(d[3])),
+                              closesMTF
+                          );
+                          const msbStructure = QuantMath.detectMarketStructure(
+                              klinesHTF.map(d => parseFloat(d[2])),
+                              klinesHTF.map(d => parseFloat(d[3])),
+                              closesHTF
+                          );
                           
   
                           const altReturns = [];
@@ -1213,6 +1238,28 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                   sfpAtEntry: msbIsSFP
                               });
 
+                              // MTF MATRIX (2026-08-13): multi-timeframe
+                              // alignment shadow — 5 frames (entry/bias/
+                              // structure từ detectMarketStructure, btc4h/
+                              // btc1d từ resolveBtcStructure fixed frames O1).
+                              // Payload/log only: NEVER gates the candidate.
+                              const mtfMatrix = evaluateMtfMatrix({
+                                  direction,
+                                  entryInterval: interval,
+                                  frames: {
+                                      entry: msbData,
+                                      bias: msbBias,
+                                      structure: msbStructure,
+                                      btc4h: resolveBtcStructure(btcRegimeCache, '4h'),
+                                      btc1d: resolveBtcStructure(btcRegimeCache, '1d')
+                                  }
+                              });
+                              accumulateMtfStats(mtfStats, {
+                                  interval,
+                                  verdict: mtfMatrix.alignment.verdict,
+                                  counterTrendEntry: mtfMatrix.alignment.counterTrendEntry
+                              });
+
                               const baseSystemScore = TradeValidator.evaluateScore(
                                   autoData,
                                   apiMacro,
@@ -1495,6 +1542,22 @@ btcRegime:
                                       msbRegime: msbData.regime ?? null,
                                       msbState: msbData.msbState ?? null,
                                       btcMsbAligned,
+                                      // MTF MATRIX (2026-08-13): payload COMPACT
+                                      // — verdict/topFrame/counts/
+                                      // counterTrendEntry only. frames/advice
+                                      // KHÔNG emit (entry/btc frames đã có sẵn:
+                                      // msbRegime/msbState, btcStructure4h/1d;
+                                      // advice chỉ log).
+                                      mtfMatrix: {
+                                          verdict: mtfMatrix.alignment.verdict,
+                                          topFrame: mtfMatrix.alignment.topFrame,
+                                          counts: {
+                                              aligned: mtfMatrix.alignment.countAligned,
+                                              misaligned: mtfMatrix.alignment.countMisaligned,
+                                              neutral: mtfMatrix.alignment.countNeutral
+                                          },
+                                          counterTrendEntry: mtfMatrix.alignment.counterTrendEntry
+                                      },
                                       rolloutMode: targetInfo.rolloutMode,
                                       executionMode: targetInfo.executionMode,
                                       strategyPriority: routedStrategy.priority,
@@ -1613,6 +1676,18 @@ btcRegime:
                                       
                                       epochId: getCurrentAiModel() ? 'epoch-matrix-active' : 'epoch-alpha-001'
                                   });
+                                  // MTF MATRIX (2026-08-13): advice chỉ log —
+                                  // không emit vào payload (shadow compact).
+                                  console.log(
+                                      `[MTF MATRIX] ${symbol} ${interval} ${direction} ` +
+                                      `${mtfMatrix.alignment.verdict} ` +
+                                      `top=${mtfMatrix.alignment.topFrame ?? 'none'} ` +
+                                      `counts=${mtfMatrix.alignment.countAligned}/` +
+                                      `${mtfMatrix.alignment.countMisaligned}/` +
+                                      `${mtfMatrix.alignment.countNeutral} ` +
+                                      `ctr=${mtfMatrix.alignment.counterTrendEntry} ` +
+                                      `advice=${JSON.stringify(mtfMatrix.advice)}`
+                                  );
                               }
                               }
                           }
@@ -1686,6 +1761,10 @@ btcRegime:
           // F-E1b (2026-08-12): BTC bias distribution shadow (calibrate NEUTRAL rate).
           const btcBiasLine = formatBtcBiasSummary(btcBiasStats);
           if (btcBiasLine) console.log(btcBiasLine);
+          // MTF MATRIX (2026-08-13): verdict distribution shadow cuối cycle —
+          // NEUTRAL rate + counterTrendEntry per-interval (pattern [MSB ROUTING]).
+          const mtfMatrixLine = formatMtfSummary(mtfStats);
+          if (mtfMatrixLine) console.log(mtfMatrixLine);
           // F-E2b (2026-08-12): SL structure LIVE cycle summary — counters
           // đo hiệu ứng THẬT (slTech đã wire), không còn shadow.
           if (slShadowStats.wouldTighten > 0) {

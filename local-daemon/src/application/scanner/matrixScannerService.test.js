@@ -585,6 +585,40 @@ test('F-E1b/F-E2a/F-E3 e2e: shadow payload fields reach approved setups; tp1 unt
   }
 });
 
+const MTF_VERDICTS = new Set(['NEUTRAL', 'STRONG_ALIGNED', 'ALIGNED', 'MISALIGNED', 'MIXED']);
+const MTF_TOP_FRAMES = new Set(['entry', 'bias', 'structure', 'btc4h', 'btc1d']);
+
+// MTF MATRIX (2026-08-13): payload COMPACT shadow — verdict/topFrame/counts/
+// counterTrendEntry only. frames/advice never emitted (entry/btc frames đã có
+// sẵn trong payload: msbRegime/msbState, btcStructure4h/1d; advice chỉ log).
+test('MTF MATRIX e2e: approved candidate có mtfMatrix compact; payload KHÔNG có frames/advice', async () => {
+  const { svc, getResults } = scanMockContext();
+  await svc.runMatrixScanner();
+  const results = getResults();
+  assert.equal(results.length, 1, 'exactly one SCAN_RESULTS broadcast per cycle');
+  const setups = results[0].data;
+  assert.ok(setups.length > 0, 'mock fixture must produce at least one approved setup');
+  for (const setup of setups) {
+    assert.ok(setup.mtfMatrix, 'approved setup missing mtfMatrix');
+    assert.ok(
+      MTF_VERDICTS.has(setup.mtfMatrix.verdict),
+      `unexpected mtfMatrix.verdict ${setup.mtfMatrix.verdict}`
+    );
+    assert.ok(
+      setup.mtfMatrix.topFrame === null || MTF_TOP_FRAMES.has(setup.mtfMatrix.topFrame),
+      `unexpected mtfMatrix.topFrame ${setup.mtfMatrix.topFrame}`
+    );
+    assert.deepEqual(
+      Object.keys(setup.mtfMatrix.counts).sort(),
+      ['aligned', 'misaligned', 'neutral'],
+      'counts must be exactly {aligned, misaligned, neutral}'
+    );
+    assert.equal(typeof setup.mtfMatrix.counterTrendEntry, 'boolean');
+    assert.equal('frames' in setup.mtfMatrix, false, 'frames must not be emitted in payload');
+    assert.equal('advice' in setup.mtfMatrix, false, 'advice must not be emitted in payload');
+  }
+});
+
 test('F-E1b/F-E2a/F-E3 e2e: tp1DistAtr is positive and tp1 stays off entry', async () => {
   const { svc, getResults } = scanMockContext();
   await svc.runMatrixScanner();
