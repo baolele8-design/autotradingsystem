@@ -850,21 +850,33 @@ function assertDirection(direction) {
   }
 }
 
+// 2026-08-13: strategy_id persist từ scanner/CSV đôi khi kebab-case
+// ('ADAPTIVE-SHORT-FALLBACK', đôi khi kèm ' [BOT]') trong khi catalog dùng
+// snake_case — normalize 2 phía (dash → underscore, uppercase) trước khi so.
+const normalizeStrategyKey = (value) => String(value)
+  .trim()
+  .toUpperCase()
+  .replace(/-/g, '_');
+
 export function getStrategyDefinition(strategyIdOrName) {
   if (!strategyIdOrName) return null;
   if (typeof strategyIdOrName === 'object' && strategyIdOrName?.strategyId) {
-    return CATALOG_BY_ID.get(strategyIdOrName.strategyId) || null;
+    return CATALOG_BY_ID.get(normalizeStrategyKey(strategyIdOrName.strategyId)) || null;
   }
   const str = String(strategyIdOrName).trim();
   if (CATALOG_BY_ID.has(str)) return CATALOG_BY_ID.get(str);
 
-  const upper = str.toUpperCase();
+  const upper = normalizeStrategyKey(str);
+  if (CATALOG_BY_ID.has(upper)) return CATALOG_BY_ID.get(upper);
+
   for (const strategy of STRATEGY_CATALOG) {
+    const catalogKey = normalizeStrategyKey(strategy.strategyId);
+    const displayKey = normalizeStrategyKey(strategy.displayName);
     if (
-      strategy.strategyId.toUpperCase() === upper ||
-      strategy.displayName.toUpperCase() === upper ||
-      upper.includes(strategy.strategyId.toUpperCase()) ||
-      upper.includes(strategy.displayName.toUpperCase())
+      catalogKey === upper ||
+      displayKey === upper ||
+      upper.includes(catalogKey) ||
+      upper.includes(displayKey)
     ) {
       return strategy;
     }

@@ -3,6 +3,7 @@ import {
   encodeLiquidityLedgerEvent,
   withLiquidityFeatureVersion
 } from '../../../domain/analytics/quant/liquidityMetadata.js';
+import { numberOrNull } from '../../../domain/analytics/quant/indicatorPersistence.js';
 import {
   decideExitReasonUpdate
 } from './tradeLedgerExitReason.js';
@@ -79,16 +80,18 @@ export async function saveTradeLog(
         // --- CÁC CỘT VI CẤU TRÚC VÀ RỦI RO (MỚI) ---
         vpin: parseFloat(autoData.vpinValue || 0),
         obi: parseFloat(autoData.obi || 0.5),
-        amihud: parseFloat(autoData.amihud || 0),
-        isi: parseFloat(autoData.isi || 0),
+        // 2026-08-13: indicator missing → null (KHÔNG 0 — đồng bộ với
+        // autoBot.js + scanner stamp; 0 confound gate đọc lại từ DB).
+        amihud: numberOrNull(autoData.amihud),
+        isi: numberOrNull(autoData.isi),
         // 🚀 BỔ SUNG 7 CỘT LƯỢNG TỬ MỚI VÀO ĐÂY:
-        cvd_trend: parseFloat(autoData.cvdTrend || 0),
-        vwap: parseFloat(autoData.vwap || 0),
-        vwap_upper: parseFloat(autoData.vwapUpper || 0),
-        vwap_lower: parseFloat(autoData.vwapLower || 0),
-        hurst_value: parseFloat(autoData.hurstValue || 0),
-        liq_longs_vol: parseFloat(autoData.liqLongsVol || 0),
-        liq_shorts_vol: parseFloat(autoData.liqShortsVol || 0),
+        cvd_trend: numberOrNull(autoData.cvdTrend),
+        vwap: numberOrNull(autoData.vwap),
+        vwap_upper: numberOrNull(autoData.vwapUpper),
+        vwap_lower: numberOrNull(autoData.vwapLower),
+        hurst_value: numberOrNull(autoData.hurstValue),
+        liq_longs_vol: numberOrNull(autoData.liqLongsVol),
+        liq_shorts_vol: numberOrNull(autoData.liqShortsVol),
         // ------------------------------------------
         true_ev: parseFloat(mathCore.trueEVValue || 0),
         kelly_pct: parseFloat(mathCore.kellyPct || 0),

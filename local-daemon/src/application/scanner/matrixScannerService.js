@@ -16,6 +16,7 @@ import {
   encodeLiquidityLedgerEvent,
   withLiquidityFeatureVersion
 } from '../../../../src/domain/analytics/quant/liquidityMetadata.js';
+import { numberOrNull } from '../../../../src/domain/analytics/quant/indicatorPersistence.js';
 import { TradeValidator } from '../../../../src/domain/trading/TradeValidator.js';
 
 // REVERT P0-2 (2026-08-13, owner directive): version engine hiện tại —
@@ -57,12 +58,18 @@ import {
   evaluateMtfMatrix,
   createMtfStats,
   accumulateMtfStats,
-  formatMtfSummary
+  formatMtfSummary,
+  lowerFrameFor
 } from '../../domain/execution/mtfMatrix.js';
 import {
   findNearestResistance,
   findNearestSupport
 } from '../../../../src/domain/analytics/quant/structureLevels.js';
+import {
+  createH2RealizedStats,
+  accumulateH2Realized,
+  formatH2RealizedSummary
+} from '../../domain/execution/h2RealizedTelemetry.js';
 
 export function buildMarketDepthUrl(symbol) {
   return `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=500`;
@@ -261,6 +268,17 @@ export function computePendingOrderMathCore(pLog, {
   };
 }
 
+// 2026-08-13 (TD-014 sizing metric): implied size delta khi SL structure
+// chặt hơn ATR-baseline. Công thức cũ (structDistance / slAtr_PRICE) - 1
+// ≈ -100% LUÔN vì slAtr là GIÁ stop (vd 99.5), không phải khoảng cách —
+// metric rác nuôi quyết định sizing. Đúng: (ATR-distance / struct-distance)
+// - 1: struct chặt hơn → dương; struct = ATR → 0; input không hợp lệ → 0.
+export function computeImpliedSizeDelta(atrDistance, structDistance) {
+  if (!Number.isFinite(atrDistance) || atrDistance <= 0) return 0;
+  if (!Number.isFinite(structDistance) || structDistance <= 0) return 0;
+  return (atrDistance / structDistance) - 1;
+}
+
 export function createMatrixScannerService(context) {
   const {
     btcReturnsCache,
@@ -295,6 +313,10 @@ export function createMatrixScannerService(context) {
       // MTF MATRIX (2026-08-13): per-cycle verdict distribution shadow —
       // NEUTRAL rate + counterTrendEntry per-interval (payload/log only).
       const mtfStats = createMtfStats();
+      // REVERT P0-2 (2026-08-13): h2_realized TELEMETRY per-cycle accumulator
+      // theo (direction, version) — thay log per-candidate (~1M dòng/ngày),
+      // pattern [BTC BIAS SHADOW]. Log 1 dòng/key cuối cycle.
+      const h2RealizedStats = createH2RealizedStats();
       // F-E2b (2026-08-12): per-cycle SL structure LIVE counters — đo hiệu
       // ứng thật (slTech đã wire vào structure stop khi applied='STRUCTURE').
       const slShadowStats = {
@@ -938,11 +960,16 @@ btcReturnsCache.clear();
                               const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategyForGates, resolvedTradeLogsClean, pLog.strategy_version);
 
                               // REVERT P0-2 (2026-08-13): h2_realized telemetry
-                              // (shadow — gate OR, không chặn). Log per-candidate
-                              // khi validator tính được (n ≥ 30 cùng version).
+                              // (shadow — gate OR, không chặn). 2026-08-13:
+                              // gộp vào accumulator per-cycle (không còn log
+                              // per-candidate — ~1M dòng/ngày).
                               const h2PendingGate = pLogGates.hardGates.find(g => g.id === 'h2');
                               if (h2PendingGate?.h2_telemetry) {
-                                  console.log(`[H2 REALIZED] direction=${pLogDir} version=${h2PendingGate.h2_telemetry.version} n=${h2PendingGate.h2_telemetry.n} EV=${h2PendingGate.h2_realized.toFixed(3)}R (telemetry only — gate OR)`);
+                                  accumulateH2Realized(h2RealizedStats, {
+                                      direction: pLogDir,
+                                      version: h2PendingGate.h2_telemetry.version,
+                                      realizedEV: h2PendingGate.h2_realized
+                                  });
                               }
   
                               // 3. RA QUYẾT ĐỊNH
@@ -992,15 +1019,20 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                               resolveBtcRegime(btcRegimeCache, interval),
                                           vpin: parseFloat(autoData.vpinValue || 0),
                                           obi: parseFloat(dynamicObi || 0.5),
-                                          amihud: parseFloat(amihudValue || 0),
-                                          isi: parseFloat(isiValue || 0),
-                                          cvd_trend: parseFloat(autoData.cvdTrend || 0),
-                                          vwap: parseFloat(autoData.vwap || 0),
-                                          vwap_upper: parseFloat(autoData.vwapUpper || 0),
-                                          vwap_lower: parseFloat(autoData.vwapLower || 0),
-                                          hurst_value: parseFloat(autoData.hurstValue || 0),
-                                          liq_longs_vol: parseFloat(liqData.longs || 0),
-                                          liq_shorts_vol: parseFloat(liqData.shorts || 0),
+                                          // 2026-08-13: indicator missing →
+                                          // null (KHÔNG 0 — 0 confound gate
+                                          // đọc lại: vwap=0 chặn 100% LONG +
+                                          // pass 100% SHORT; hurst=0 chặn
+                                          // trend-family; cvd=0 fail-open méo).
+                                          amihud: numberOrNull(amihudValue),
+                                          isi: numberOrNull(isiValue),
+                                          cvd_trend: numberOrNull(autoData.cvdTrend),
+                                          vwap: numberOrNull(autoData.vwap),
+                                          vwap_upper: numberOrNull(autoData.vwapUpper),
+                                          vwap_lower: numberOrNull(autoData.vwapLower),
+                                          hurst_value: numberOrNull(autoData.hurstValue),
+                                          liq_longs_vol: numberOrNull(liqData.longs),
+                                          liq_shorts_vol: numberOrNull(liqData.shorts),
                                           soft_score: parseFloat(pLogScore.score),
                                           gate_s1: pLogScore.checks?.checkS1 === true,
                                           gate_s2: pLogScore.checks?.checkS2 === true,
@@ -1228,20 +1260,45 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                   { lookback: 40, atr: atr14 }
                               );
                               const msbIsSFP = Boolean(msbData.isSFP);
-                              const btcMsbAligned = direction === 'LONG'
+                              // 2026-08-13: rename field → msbAligned — đây là
+                              // MSB của CHÍNH symbol (không phải BTC).
+                              const msbAligned = direction === 'LONG'
                                   ? msbData.msbState === 'Bullish_MSB'
                                   : msbData.msbState === 'Bearish_MSB';
                               accumulateIntervalMsbRouting(intervalStats, {
                                   interval,
-                                  aligned: btcMsbAligned,
-                                  misaligned: !btcMsbAligned,
+                                  aligned: msbAligned,
+                                  misaligned: !msbAligned,
                                   sfpAtEntry: msbIsSFP
                               });
+
+                              // LOWER FRAME (2026-08-13, owner directive mục
+                              // 2): context-cell telemetry — khung nhỏ hơn 1
+                              // bậc so với khung lệnh (1h→15m, 4h→1h, 1d→4h;
+                              // 15m→null vì 5m bị loại — D-MTF-4). Nguồn:
+                              // klinesCache[lower] đã fetch sẵn 7 khung (:563)
+                              // → cost 0 fetch mới. Guard dữ liệu như :592
+                              // pattern (klinesMTF >= 30); miss/thiếu → null
+                              // (fail-open). KHÔNG tham gia verdict/counts —
+                              // chỉ payload/log shadow.
+                              const lowerInterval = lowerFrameFor(interval);
+                              let msbLower = null;
+                              if (lowerInterval) {
+                                  const klinesLower = klinesCache[lowerInterval];
+                                  if (klinesLower && klinesLower.length >= 30) {
+                                      msbLower = QuantMath.detectMarketStructure(
+                                          klinesLower.map(d => parseFloat(d[2])),
+                                          klinesLower.map(d => parseFloat(d[3])),
+                                          klinesLower.map(d => parseFloat(d[4]))
+                                      );
+                                  }
+                              }
 
                               // MTF MATRIX (2026-08-13): multi-timeframe
                               // alignment shadow — 5 frames (entry/bias/
                               // structure từ detectMarketStructure, btc4h/
-                              // btc1d từ resolveBtcStructure fixed frames O1).
+                              // btc1d từ resolveBtcStructure fixed frames O1)
+                              // + lower frame context-cell (frames.lower).
                               // Payload/log only: NEVER gates the candidate.
                               const mtfMatrix = evaluateMtfMatrix({
                                   direction,
@@ -1251,7 +1308,8 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                       bias: msbBias,
                                       structure: msbStructure,
                                       btc4h: resolveBtcStructure(btcRegimeCache, '4h'),
-                                      btc1d: resolveBtcStructure(btcRegimeCache, '1d')
+                                      btc1d: resolveBtcStructure(btcRegimeCache, '1d'),
+                                      lower: msbLower
                                   }
                               });
                               accumulateMtfStats(mtfStats, {
@@ -1314,15 +1372,18 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                                       ? Math.abs(slStructShadow.slAtr - slStructShadow.slStruct) / atr14
                                       : 0;
                                   slShadowStats.tighteningAtrSum += tighteningAtr;
-                                  if (slStructShadow.slAtr > 0) {
-                                      const sizeDelta = (slStructShadow.distance / slStructShadow.slAtr) - 1;
+                                  // 2026-08-13 (TD-014): công thức đúng —
+                                  // (ATR-distance / struct-distance) - 1.
+                                  // Cũ: distance/slAtr_PRICE - 1 ≈ -100% LUÔN.
+                                  // 2026-08-13 (log): bỏ log per-candidate
+                                  // [SL STRUCTURE LIVE] (trùng cycle summary).
+                                  if (slStructShadow.distance > 0) {
+                                      const sizeDelta = computeImpliedSizeDelta(
+                                          riskDiffTechAtr,
+                                          slStructShadow.distance
+                                      );
                                       slShadowStats.sizeDeltaSum += sizeDelta;
                                   }
-                                  console.log(
-                                      `[SL STRUCTURE LIVE] ${symbol} ${interval} ${direction}: ` +
-                                      `${slStructShadow.slAtr.toFixed(4)} -> ${slStructShadow.stopPrice.toFixed(4)} ` +
-                                      `(${slStructShadow.reason}${slStructShadow.momentumSource ? ' ' + slStructShadow.momentumSource : ''})`
-                                  );
                               }
 
                               // F-E2b (2026-08-12): SL structure LIVE — khi
@@ -1451,11 +1512,16 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               let gates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'FUTURES', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean, CURRENT_ENGINE_STRATEGY_VERSION);
                               
                               // REVERT P0-2 (2026-08-13): h2_realized telemetry
-                              // (shadow — gate OR, không chặn). Log per-candidate
-                              // khi validator tính được (n ≥ 30 cùng version).
+                              // (shadow — gate OR, không chặn). 2026-08-13:
+                              // gộp vào accumulator per-cycle (không còn log
+                              // per-candidate — ~1M dòng/ngày).
                               const h2MainGate = gates.hardGates.find(g => g.id === 'h2');
                               if (h2MainGate?.h2_telemetry) {
-                                  console.log(`[H2 REALIZED] direction=${direction} version=${h2MainGate.h2_telemetry.version} n=${h2MainGate.h2_telemetry.n} EV=${h2MainGate.h2_realized.toFixed(3)}R (telemetry only — gate OR)`);
+                                  accumulateH2Realized(h2RealizedStats, {
+                                      direction,
+                                      version: h2MainGate.h2_telemetry.version,
+                                      realizedEV: h2MainGate.h2_realized
+                                  });
                               }
                               
                               // Nếu Futures tịt vì Margin (Gate H4), thử nảy qua SPOT xem pass không!
@@ -1541,7 +1607,7 @@ btcRegime:
                                       msbIsSFP,
                                       msbRegime: msbData.regime ?? null,
                                       msbState: msbData.msbState ?? null,
-                                      btcMsbAligned,
+                                      msbAligned,
                                       // MTF MATRIX (2026-08-13): payload COMPACT
                                       // — verdict/topFrame/counts/
                                       // counterTrendEntry only. frames/advice
@@ -1556,7 +1622,13 @@ btcRegime:
                                               misaligned: mtfMatrix.alignment.countMisaligned,
                                               neutral: mtfMatrix.alignment.countNeutral
                                           },
-                                          counterTrendEntry: mtfMatrix.alignment.counterTrendEntry
+                                          counterTrendEntry: mtfMatrix.alignment.counterTrendEntry,
+                                          // LOWER FRAME (2026-08-13): context-
+                                          // cell telemetry — {regime, msbState,
+                                          // agreesDirection} hoặc null (15m
+                                          // entry / dữ liệu miss fail-open).
+                                          // 1 field object — vẫn compact.
+                                          lower: mtfMatrix.alignment.lower
                                       },
                                       rolloutMode: targetInfo.rolloutMode,
                                       executionMode: targetInfo.executionMode,
@@ -1765,6 +1837,10 @@ btcRegime:
           // NEUTRAL rate + counterTrendEntry per-interval (pattern [MSB ROUTING]).
           const mtfMatrixLine = formatMtfSummary(mtfStats);
           if (mtfMatrixLine) console.log(mtfMatrixLine);
+          // REVERT P0-2 (2026-08-13): h2_realized telemetry summary cuối
+          // cycle — 1 dòng per (direction, version), thay log per-candidate.
+          const h2RealizedLine = formatH2RealizedSummary(h2RealizedStats);
+          if (h2RealizedLine) console.log(h2RealizedLine);
           // F-E2b (2026-08-12): SL structure LIVE cycle summary — counters
           // đo hiệu ứng THẬT (slTech đã wire), không còn shadow.
           if (slShadowStats.wouldTighten > 0) {

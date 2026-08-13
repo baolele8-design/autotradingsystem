@@ -210,12 +210,16 @@ export const TradeValidator = {
       l1Str.includes('Range') ||
       l1Str.includes('Mean Reversion') ||
       l1Str.includes('Chop');
+    // 2026-08-13: indicator missing giờ persist NULL (không 0) — fail-open
+    // khi null. Trước đây missing → 0: entry < 0 luôn false → chặn 100%
+    // LONG; entry > 0 luôn true → pass 100% SHORT (confound hướng sample).
     const isVwapSafe = direction === 'LONG' 
-        ? entry < autoData.vwapUpper // Không Long nếu giá đang lơ lửng ngoài biên trên VWAP
-        : entry > autoData.vwapLower; // Không Short nếu giá đã rớt khỏi biên dưới VWAP
+        ? (autoData.vwapUpper == null || entry < autoData.vwapUpper) // Không Long nếu giá đang lơ lửng ngoài biên trên VWAP
+        : (autoData.vwapLower == null || entry > autoData.vwapLower); // Không Short nếu giá đã rớt khỏi biên dưới VWAP
         
     const isCvdAligned =
       cvdDivergenceAllowed ||
+      autoData.cvdTrend == null ||
       (direction === 'LONG'
         ? autoData.cvdTrend > -5
         : autoData.cvdTrend < 5);
@@ -352,7 +356,7 @@ export const TradeValidator = {
       { id: 'h_expansion_fomo', passed: !(l2 === 'Expansion' && isOverextendedEMA20), text: `FOMO FILTER: Cấm mua đuổi khi L2 Expansion và giá đã chạy quá xa EMA20 (>1.5 ATR).` },
       { id: 'h_vwap', passed: isVwapSafe, text: `VWAP GRAVITY: Tránh FOMO - Giá đã đi quá xa vùng Giá trị Trung bình của Khối lượng (VWAP Bands).` },
       { id: 'h_cvd', passed: isCvdAligned, text: `CVD DIVERGENCE: Khóa lệnh - Taker Flow (CVD) đang xả hàng chủ động ngược hướng phân tích.` },
-      { id: 'h_hurst', passed: !(autoData.hurstValue < 0.4 && requiresTrendPersistence), text: `HURST EXPONENT: Thị trường Mean-Reverting, không phù hợp family momentum.` }
+      { id: 'h_hurst', passed: !(autoData.hurstValue != null && autoData.hurstValue < 0.4 && requiresTrendPersistence), text: `HURST EXPONENT: Thị trường Mean-Reverting, không phù hợp family momentum.` }
     ];
 
     // F5 (P7): soft gates chỉ còn telemetry hữu ích — s1 (93% true), s4 (90% true)

@@ -536,6 +536,27 @@ test('exposes strategy-aware range and high-VPIN policies by stable ID', () => {
   assert.equal(getStrategyDefinition('NOT_A_STRATEGY'), null);
 });
 
+// 2026-08-13: 24/52 lệnh v1.5.2 có strategy_id kebab-case
+// ('ADAPTIVE-SHORT-FALLBACK') trong khi catalog dùng snake_case —
+// getStrategyDefinition không resolve được → mất policy
+// (h_range_block/h_vpin chạy sai). Normalize cả 2 phía (dash → underscore).
+test('getStrategyDefinition normalizes kebab-case IDs to snake-case catalog entries', () => {
+  const asf = getStrategyDefinition('ADAPTIVE_SHORT_FALLBACK');
+  assert.ok(asf, 'snake-case ID must resolve');
+  assert.equal(asf.strategyId, 'ADAPTIVE_SHORT_FALLBACK');
+  assert.equal(getStrategyDefinition('adaptive-short-fallback'), asf);
+  assert.equal(getStrategyDefinition('ADAPTIVE-SHORT-FALLBACK'), asf);
+  assert.equal(getStrategyDefinition('Adaptive-Short-Fallback'), asf);
+  assert.equal(getStrategyDefinition('ADAPTIVE_LONG_FALLBACK'), getStrategyDefinition('ADAPTIVE-LONG-FALLBACK'));
+  assert.equal(getStrategyDefinition('NOT_A_STRATEGY'), null);
+});
+
+test('getStrategyDefinition resolves kebab-case IDs with [BOT] suffix (strategy_name format)', () => {
+  const asf = getStrategyDefinition('ADAPTIVE_SHORT_FALLBACK');
+  assert.equal(getStrategyDefinition('ADAPTIVE-SHORT-FALLBACK [BOT]'), asf);
+  assert.equal(getStrategyDefinition('adaptive-short-fallback [bot]'), asf);
+});
+
 test('is deterministic, does not mutate inputs, and rejects ambiguous directions', () => {
   const input = paperFixtureById.FLOW_REACCELERATION;
   const snapshot = structuredClone(input);

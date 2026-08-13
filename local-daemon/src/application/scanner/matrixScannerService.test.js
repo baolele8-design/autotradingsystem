@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildMarketDepthUrl,
   computePendingOrderMathCore,
+  computeImpliedSizeDelta,
   TARGET_INTERVALS,
   createMatrixScannerService
 } from './matrixScannerService.js';
@@ -445,6 +446,32 @@ test('R2 formatNearMissLine: CONF kèm confK/confN phổ biến nhất', () => {
   assert.ok(line.includes('CONF:9(1/2)'));
 });
 
+// 2026-08-13 regression (TD-014 sizing metric): công thức cũ
+// (structDistance / slAtr_PRICE) - 1 ≈ -100% LUÔN (0.3/99.5 - 1) vì slAtr là
+// GIÁ stop, không phải khoảng cách — metric rác nuôi quyết định sizing.
+// Công thức đúng: (ATR-distance / struct-distance) - 1.
+test('computeImpliedSizeDelta: struct chặt hơn ATR → delta dương (không -99.7%)', () => {
+  // entry 100, slAtr 99.5 (ATR distance 2.5 trong scope thật = riskDiffTechAtr),
+  // struct 99.7 → distance 0.3 → 2.5/0.3 - 1 ≈ +7.33 (KHÔNG phải 0.3/99.5-1 ≈ -99.7%)
+  const delta = computeImpliedSizeDelta(2.5, 0.3);
+  assert.ok(delta > 7, `delta=${delta} phải ≈ +7.33 (struct chặt hơn ATR → dương)`);
+  assert.equal(delta.toFixed(3), '7.333');
+});
+
+test('computeImpliedSizeDelta: struct = ATR → 0; struct lỏng hơn → âm', () => {
+  assert.equal(computeImpliedSizeDelta(2.5, 2.5), 0);
+  assert.equal(computeImpliedSizeDelta(1.0, 2.0), -0.5);
+});
+
+test('computeImpliedSizeDelta: input không hợp lệ → 0 (không NaN)', () => {
+  assert.equal(computeImpliedSizeDelta(0, 0.3), 0);
+  assert.equal(computeImpliedSizeDelta(-2.5, 0.3), 0);
+  assert.equal(computeImpliedSizeDelta(2.5, 0), 0);
+  assert.equal(computeImpliedSizeDelta(NaN, 0.3), 0);
+  assert.equal(computeImpliedSizeDelta(2.5, NaN), 0);
+  assert.equal(computeImpliedSizeDelta(undefined, 0.3), 0);
+});
+
 // ============================================================
 // F-E1b/F-E2a/F-E3 (2026-08-12): shadow payload e2e — drives the real
 // scanner scan cycle (mock exchange, no network) and asserts the new
@@ -475,7 +502,9 @@ const scanMockContext = (overrides = {}) => {
   // cùng chain select→or→order. Mock phân loại theo filter string: query
   // resolved (chứa 'WIN') trả 5 rows (< 30 → h2 giữ plannedEV mode → mọi
   // test scanner hiện tại không đổi hành vi); query 12h trả 40 rows như cũ.
-  const resolvedRows = Array.from({ length: 5 }, (_, i) => ({
+  // overrides.resolvedRows: test h2-telemetry truyền 40 rows cùng version
+  // để h2_realized tính được (n ≥ 30).
+  const resolvedRows = (overrides && overrides.resolvedRows) || Array.from({ length: 5 }, (_, i) => ({
     id: `resolved-${i}`,
     symbol: 'BTCUSDT',
     status: 'WIN',
@@ -537,7 +566,7 @@ const SHADOW_PAYLOAD_KEYS = [
   'btcStructure4h', 'btcStructure1d', 'btcBias', 'btcBias4h', 'btcBias1d',
   'slStructShadow', 'slApplied', 'slSizingDistance',
   'resistanceNear', 'supportNear', 'tp1DistAtr',
-  'msbIsSFP', 'msbRegime', 'msbState', 'btcMsbAligned'
+  'msbIsSFP', 'msbRegime', 'msbState', 'msbAligned'
 ];
 
 test('F-E1b/F-E2a/F-E3 e2e: shadow payload fields reach approved setups; tp1 untouched', async () => {
@@ -581,7 +610,66 @@ test('F-E1b/F-E2a/F-E3 e2e: shadow payload fields reach approved setups; tp1 unt
       `unexpected slStructShadow.reason ${setup.slStructShadow.reason}`
     );
     assert.ok(Array.isArray(setup.msbIsSFP) || typeof setup.msbIsSFP === 'boolean', 'msbIsSFP normalized to boolean');
-    assert.equal(typeof setup.btcMsbAligned, 'boolean', 'btcMsbAligned is boolean');
+    // 2026-08-13: rename btcMsbAligned → msbAligned — MSB là của chính
+    // symbol (không phải BTC); 0 consumer ngoài payload shadow.
+    assert.equal(typeof setup.msbAligned, 'boolean', 'msbAligned is boolean');
+    assert.equal(setup.btcMsbAligned, undefined, 'btcMsbAligned đã rename — không còn trong payload');
+  }
+});
+
+// 2026-08-13: rename btcMsbAligned → msbAligned (grep guard — cấm tái xuất
+// tên cũ trong source scanner).
+test('rename guard: source scanner không còn btcMsbAligned', async () => {
+  const source = await import('node:fs').then(fs =>
+    fs.promises.readFile(
+      new URL('./matrixScannerService.js', import.meta.url),
+      'utf8'
+    )
+  );
+  assert.ok(
+    !source.includes('btcMsbAligned'),
+    'btcMsbAligned không được xuất hiện trong matrixScannerService.js'
+  );
+});
+
+// 2026-08-13 (Fix 3): [H2 REALIZED] + [SL STRUCTURE LIVE] gộp/bỏ log
+// per-candidate → summary per-cycle. Capture console.log trong 1 cycle
+// (mock resolved rows 40 cùng version → h2 telemetry cháy).
+test('h2 telemetry: log gộp per-cycle, KHÔNG còn per-candidate [H2 REALIZED] / [SL STRUCTURE LIVE]', async () => {
+  const resolvedRows = Array.from({ length: 40 }, (_, i) => ({
+    id: `resolved-h2-${i}`,
+    symbol: 'BTCUSDT',
+    status: i % 2 === 0 ? 'WIN' : 'LOSS',
+    direction: 'LONG',
+    interval: '15m',
+    strategy_version: 'v1.5.2-auto|liquidity-v2',
+    pnl_usd: i % 2 === 0 ? 5 : -1,
+    risk_amount_usd: 1,
+    created_at: new Date(Date.now() - i * 60_000).toISOString()
+  }));
+  const { svc } = scanMockContext({ resolvedRows });
+
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await svc.runMatrixScanner();
+  } finally {
+    console.log = originalLog;
+  }
+
+  const h2Lines = logs.filter(l => l.includes('[H2 REALIZED]'));
+  assert.ok(h2Lines.length >= 1, 'h2 telemetry phải cháy (40 rows cùng version) — cần summary');
+  assert.equal(h2Lines.length, 1, 'đúng 1 summary line per cycle (gộp theo direction|version)');
+  assert.match(h2Lines[0], /avgEV=/, 'format summary: avgEV=... (không phải EV= per-candidate)');
+  assert.doesNotMatch(h2Lines[0], /n=\d+ EV=/, 'không còn format per-candidate EV=...R');
+
+  const slLines = logs.filter(l => l.startsWith('[SL STRUCTURE LIVE]'));
+  for (const line of slLines) {
+    assert.ok(
+      line.startsWith('[SL STRUCTURE LIVE] cycle:'),
+      `per-candidate [SL STRUCTURE LIVE] phải bị bỏ: ${line.slice(0, 90)}`
+    );
   }
 });
 
@@ -616,6 +704,71 @@ test('MTF MATRIX e2e: approved candidate có mtfMatrix compact; payload KHÔNG c
     assert.equal(typeof setup.mtfMatrix.counterTrendEntry, 'boolean');
     assert.equal('frames' in setup.mtfMatrix, false, 'frames must not be emitted in payload');
     assert.equal('advice' in setup.mtfMatrix, false, 'advice must not be emitted in payload');
+  }
+});
+
+// LOWER FRAME (2026-08-13, owner directive mục 2): context-cell telemetry —
+// khung nhỏ hơn 1 bậc so với khung lệnh (1h→15m, 4h→1h, 1d→4h; 15m→null vì
+// 5m bị loại — D-MTF-4). Payload compact: mtfMatrix.lower = {regime,
+// msbState, agreesDirection} hoặc null. KHÔNG tham gia verdict/counts.
+test('LOWER FRAME e2e: payload có mtfMatrix.lower (15m → null); fields cũ giữ nguyên', async () => {
+  const { svc, getResults } = scanMockContext();
+  await svc.runMatrixScanner();
+  const results = getResults();
+  assert.equal(results.length, 1, 'exactly one SCAN_RESULTS broadcast per cycle');
+  const setups = results[0].data;
+  assert.ok(setups.length > 0, 'mock fixture must produce at least one approved setup');
+  for (const setup of setups) {
+    assert.ok(setup.mtfMatrix, 'approved setup missing mtfMatrix');
+    assert.ok('lower' in setup.mtfMatrix, 'mtfMatrix must expose lower field');
+    if (setup.interval === '15m') {
+      assert.equal(
+        setup.mtfMatrix.lower,
+        null,
+        '15m entry must have lower null (D-MTF-4: 5m removed)'
+      );
+    } else if (setup.mtfMatrix.lower !== null) {
+      // non-15m: lower là object telemetry hoặc null (fail-open dữ liệu)
+      assert.equal(typeof setup.mtfMatrix.lower.regime, 'string', 'lower.regime must be a string');
+      assert.ok(
+        setup.mtfMatrix.lower.msbState === null || typeof setup.mtfMatrix.lower.msbState === 'string',
+        'lower.msbState must be a string or null'
+      );
+      assert.equal(typeof setup.mtfMatrix.lower.agreesDirection, 'boolean');
+    }
+    // payload cũ giữ nguyên shape — lower là field PHỤ, không thay thế gì
+    assert.deepEqual(
+      Object.keys(setup.mtfMatrix.counts).sort(),
+      ['aligned', 'misaligned', 'neutral'],
+      'counts must stay exactly {aligned, misaligned, neutral}'
+    );
+    assert.equal('frames' in setup.mtfMatrix, false, 'frames must not be emitted in payload');
+    assert.equal('advice' in setup.mtfMatrix, false, 'advice must not be emitted in payload');
+  }
+});
+
+// LOWER FRAME fail-open: klines lower (15m) miss → mtfMatrix.lower = null,
+// không throw, setup vẫn approved bình thường.
+test('LOWER FRAME fail-open: klines lower miss → mtfMatrix.lower null, không throw', async () => {
+  const { svc, getResults } = scanMockContext({
+    marketDataCache: {
+      getKlines: async (symbol, inv) => (inv === '15m' ? null : scanKlines(250)),
+      getTicker24hAll: async () => null,
+      getPremiumIndexAll: async () => null,
+      getBookTickerAll: async () => [
+        { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '100.01', bidQty: '10', askQty: '10' }
+      ]
+    }
+  });
+  await svc.runMatrixScanner();
+  const setups = getResults()[0].data;
+  assert.ok(setups.length > 0, 'mock fixture must produce at least one approved setup');
+  for (const setup of setups) {
+    assert.ok('lower' in setup.mtfMatrix, 'mtfMatrix must expose lower field');
+    if (setup.interval === '1h') {
+      // lower('1h') = '15m' — klines miss → fail-open null
+      assert.equal(setup.mtfMatrix.lower, null, '1h entry with missing 15m klines must have lower null');
+    }
   }
 });
 

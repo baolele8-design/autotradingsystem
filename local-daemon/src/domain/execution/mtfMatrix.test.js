@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   MTF_LADDER,
+  lowerFrameFor,
   evaluateMtfMatrix,
   createMtfStats,
   accumulateMtfStats,
@@ -180,6 +181,121 @@ test('Early-return shape (thiếu lastSL/lastSH, key sfp) → chuẩn hoá null,
   assert.equal(result.frames.structure, null);
   assert.equal(result.alignment.countAligned, 1);
   assert.equal(result.alignment.countNeutral, 4);
+});
+
+// ============================================================
+// LOWER FRAME (2026-08-13, owner directive mục 2): context-cell
+// telemetry — khung nhỏ hơn 1 bậc so với khung lệnh. Chỉ tham gia
+// frames/alignment.lower — KHÔNG tham gia verdict/counts/neutralVotes.
+// ============================================================
+
+// 12L. lowerFrameFor: 15m → null (5m bị loại — D-MTF-4), 1h → 15m,
+// 4h → 1h, 1d → 4h; interval lạ/thiếu → null (fail-open)
+test('LOWER: lowerFrameFor — 15m→null, 1h→15m, 4h→1h, 1d→4h; lạ/thiếu→null', () => {
+  assert.equal(lowerFrameFor('15m'), null);
+  assert.equal(lowerFrameFor('1h'), '15m');
+  assert.equal(lowerFrameFor('4h'), '1h');
+  assert.equal(lowerFrameFor('1d'), '4h');
+  // 5m không nằm trong ladder (D-MTF-4) — không bao giờ là lower
+  assert.equal(lowerFrameFor('5m'), null);
+  assert.equal(lowerFrameFor('1w'), null);
+  assert.equal(lowerFrameFor('1M'), null);
+  assert.equal(lowerFrameFor('unknown'), null);
+  assert.equal(lowerFrameFor(undefined), null);
+});
+
+// 12L. LONG + lower Uptrend → agreesDirection true; regime/msbState telemetry;
+// verdict/counts KHÔNG đổi (5 ô gốc null → NEUTRAL)
+test('LOWER: LONG + lower Uptrend → agreesDirection true; verdict không đổi', () => {
+  const result = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({ lower: { regime: 'Uptrend', msbState: 'Bullish_MSB' } })
+  });
+  assert.deepEqual(result.alignment.lower, {
+    regime: 'Uptrend',
+    msbState: 'Bullish_MSB',
+    agreesDirection: true
+  });
+  assert.equal(result.frames.lower, 'UP');
+  // 5 ô gốc vẫn null → NEUTRAL, counts 0/0/5 (lower không vào đếm)
+  assert.equal(result.alignment.verdict, 'NEUTRAL');
+  assert.equal(result.alignment.countAligned, 0);
+  assert.equal(result.alignment.countMisaligned, 0);
+  assert.equal(result.alignment.countNeutral, 5);
+  assert.equal(result.advice.neutralVotes, 5);
+});
+
+// 12L. LONG + lower Downtrend → agreesDirection false
+test('LOWER: LONG + lower Downtrend → agreesDirection false', () => {
+  const result = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({ lower: { regime: 'Downtrend', msbState: 'Bearish_MSB' } })
+  });
+  assert.deepEqual(result.alignment.lower, {
+    regime: 'Downtrend',
+    msbState: 'Bearish_MSB',
+    agreesDirection: false
+  });
+  assert.equal(result.frames.lower, 'DOWN');
+});
+
+// 12L. lower null/thiếu (entry 15m) → alignment.lower null, không throw
+test('LOWER: frames.lower null/thiếu (entry 15m) → alignment.lower null, không throw', () => {
+  const none = evaluateMtfMatrix({ ...LONG, frames: frames({}) });
+  assert.equal(none.alignment.lower, null);
+  assert.equal(none.frames.lower, null);
+
+  const explicitNull = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({ lower: null })
+  });
+  assert.equal(explicitNull.alignment.lower, null);
+
+  const sideways = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({ lower: { regime: 'Sideways', msbState: 'None' } })
+  });
+  assert.equal(sideways.alignment.lower, null, 'Sideways regime → lower null (không phiếu)');
+
+  // không truyền frames/lower gì cả — không throw
+  const bare = evaluateMtfMatrix({ direction: 'LONG', entryInterval: '15m' });
+  assert.equal(bare.alignment.lower, null);
+});
+
+// 12L. REGRESSION verdict: ALIGNED 2-2 + topFrame agree + lower ngược hướng
+// → verdict VẪN ALIGNED (nếu lower vào votes: 2-3 → MISALIGNED — cấm)
+test('LOWER: KHÔNG đổi verdict — ALIGNED 2-2 + topFrame agree + lower ngược → vẫn ALIGNED', () => {
+  const result = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({
+      entry: UP,
+      structure: DOWN,
+      btc4h: DOWN,
+      btc1d: UP,
+      lower: DOWN
+    })
+  });
+  assert.equal(result.alignment.verdict, 'ALIGNED');
+  assert.equal(result.alignment.countAligned, 2);
+  assert.equal(result.alignment.countMisaligned, 2);
+  assert.equal(result.alignment.lower.agreesDirection, false);
+});
+
+// 12L. REGRESSION counts/neutralVotes: 5 ô gốc 2 directional + lower →
+// counts VẪN 2/0/3 (lower không vào đếm)
+test('LOWER: KHÔNG đổi counts/neutralVotes — 2 directional + lower ngược → counts 2/0/3', () => {
+  const result = evaluateMtfMatrix({
+    ...LONG,
+    frames: frames({ entry: UP, bias: UP, lower: DOWN })
+  });
+  assert.equal(result.alignment.verdict, 'ALIGNED');
+  assert.equal(result.alignment.countAligned, 2);
+  assert.equal(result.alignment.countMisaligned, 0);
+  assert.equal(result.alignment.countNeutral, 3);
+  assert.equal(result.alignment.totalDirectional, 2);
+  assert.equal(result.frames.lower, 'DOWN');
+  assert.equal(result.frames.entry, 'UP');
+  assert.equal(result.frames.bias, 'UP');
 });
 
 // 12. formatMtfSummary: null khi chưa đủ minCount; NEUTRAL rate +

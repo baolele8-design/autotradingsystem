@@ -9,6 +9,7 @@ import {
     capTargetsByOpenPositions
 } from '../domain/execution/entryRatePolicy.js';
 import { makeInitialClientAlgoId } from '../domain/orders/trailingOrders.js';
+import { buildTradeLogPayload } from '../domain/execution/tradeLogPayload.js';
 import { createDaemonSupabaseClient } from '../infrastructure/supabase/supabaseClient.js';
 import { createBinanceGateway } from '../infrastructure/binance/binanceGateway.js';
 import {
@@ -16,10 +17,6 @@ import {
     waitForAutoBotExchangeInfo,
     waitForAutoBotServerTime
 } from './autoBotStartup.js';
-import {
-    encodeLiquidityLedgerEvent,
-    withLiquidityFeatureVersion
-} from '../../../src/domain/analytics/quant/liquidityMetadata.js';
 
 // =========================================================================
 // ⚙️ BẢNG ĐIỀU KHIỂN CHIẾN LƯỢC (CAPITAL ALLOCATION)
@@ -371,122 +368,21 @@ const executeTrade = async (setup, liveCapital, fixedSizeUsd) => {
         }
 
         // 4. GHI SỔ CÁI BẰNG ĐÚNG BẢN PAYLOAD GỐC CỦA HỆ THỐNG
-        const payload = {
-            id: tradeId,
-            symbol: setup.symbol,
-            interval: setup.interval,
-            type: setup.tradeType || 'FUTURES',
-            direction: setup.direction,
-
-            entry: parseFloat(finalEntry),
-            initial_entry: parseFloat(finalEntry),
-            sl: parseFloat(finalSl),
-            tp_1_price: parseFloat(finalTp),
-
-            // ==========================================
-            // RISK GEOMETRY / TRAILING V2
-            // ==========================================
-
-            // Biết chắc từ lúc đặt lệnh
-            initial_sl: parseFloat(finalSl),
-
-            // Chưa được phép tính vì chưa biết actual Binance fill
-            initial_risk_per_coin: null,
-            opened_at: null,
-
-            protection_stage: 'NONE',
-
-            high_water_price: null,
-            high_water_r: 0,
-
-            // Legacy compatibility
-            trailing_activated: false, 
-            
-            risk_amount_usd: Math.max(0.1, parseFloat(riskAmountUSD)), 
-            position_size_usd: parseFloat(positionSizeUSD),
-            rr: parseFloat(setup.theoreticalRR), 
-            
-            // --- CÁC CỘT THỐNG KÊ LÕI ---
-            adx: parseFloat(setup.adx || 0),
-            atr: parseFloat(setup.atr || 0),
-            rsi: parseFloat(setup.rsi || 0),
-            cmf: parseFloat(setup.cmf || 0),
-            bbw_rank: parseInt(setup.bbwRank || 0),
-            oi_delta: parseFloat(setup.oiDelta || 0),
-            funding_rate: parseFloat(setup.fundingRate || 0),
-            funding_slope: parseFloat(setup.fundingSlope || 0),
-            taker_ratio: parseFloat(setup.takerRatio || 1),
-            btc_dom_slope: parseFloat(setup.btcDomSlope || 0),
-            regime_at_entry: setup.l2 || null,
-            btc_regime_at_entry: setup.btcRegime || null,
-            mvrv: parseFloat(setup.mvrv || 0),
-            fgi: parseInt(setup.fgi || 50),
-
-            // --- CÁC CỘT VI CẤU TRÚC VÀ RỦI RO ---
-            vpin: parseFloat(setup.vpin || 0),
-            obi: parseFloat(setup.obi || 0.5),
-            amihud: parseFloat(setup.amihud || 0),
-            isi: parseFloat(setup.isi || 0),
-            // 🚀 GHI XUỐNG CỘT MỚI TẠI SUPABASE:
-            cvd_trend: parseFloat(setup.cvdTrend || 0),
-            vwap: parseFloat(setup.vwap || 0),
-            vwap_upper: parseFloat(setup.vwapUpper || 0),
-            vwap_lower: parseFloat(setup.vwapLower || 0),
-            hurst_value: parseFloat(setup.hurstValue || 0),
-            liq_longs_vol: parseFloat(setup.liqLongsVol || 0),
-            liq_shorts_vol: parseFloat(setup.liqShortsVol || 0),
-            // ------------------------------------------
-            true_ev: parseFloat(setup.trueEV || 0),
-            kelly_pct: parseFloat(setup.kellyPct || 0),
-            // --- BÓC TÁCH SOFT GATES ---
-            gate_s1: setup.gateS1 || false,
-            gate_s2: setup.gateS2 || false,
-            gate_s3: setup.gateS3 || false,
-            gate_s4: setup.gateS4 || false,
-            gate_s5: setup.gateS5 || false,
-            gate_s6: setup.gateS6 || false,
-            gate_s7: setup.gateS7 || false,
-            gate_s8: setup.gateS8 || false,
-
-            trend_sma200: setup.trendSma200 || 'UP', 
-            leverage: Math.max(1, Math.ceil(positionSizeUSD / (liveCapital * 0.9 || 1))), 
-            status: 'PENDING', 
-            pnl_usd: 0, 
-            session: setup.session || 'ASIAN', 
-            l1_structure: setup.l1 || '', 
-            l2_volatility: setup.l2 || '', 
-            l3_liq_event: encodeLiquidityLedgerEvent(
-                setup.l3,
-                setup
-            ),
-            l4_positioning: setup.l4 || '', 
-            l5_momentum: setup.l5 || '', 
-            l6_macro: setup.l6 || '',
-            
-            soft_score: parseFloat(setup.score || 0), 
-            holding_cycles: setup.tHold || 1, 
-            planned_holding_cycles: setup.tHold || 1,
-            actual_holding_cycles: null,
-            strategy_id:
-                setup.strategyId || 'ADAPTIVE_LONG_FALLBACK',
-            strategy_name: `${setup.strategyId || 'ADAPTIVE_LONG_FALLBACK'} [BOT]`,
-            capital_at_entry_usd: parseFloat(liveCapital.toFixed(2)), 
-            strategy_version: withLiquidityFeatureVersion(
-                'v1.5.2-auto'
-            ),
-            applied_risk_pct: parseFloat(riskPercentOfCapital || 0), 
-            
-            asset_tier: setup.assetTier || 'Tier 2',
-            epoch_id: setup.epochId || 'epoch-alpha-001', 
-            slippage_usd: 0,
-            max_favorable_excursion_usd: 0, 
-            max_adverse_excursion_usd: 0,
-            metric_version: 'pending-live-ledger/v2',
-            pee_analyzed: false,
-            // algoId để xóa đúng CO khi lệnh kết thúc, không ảnh hưởng lệnh khác cùng coin
-            sl_algo_id: slAlgoId,
-            tp_algo_id: tpAlgoId
-        };
+        // (2026-08-13: payload tách sang tradeLogPayload.js — module thuần
+        // test được; indicator missing persist NULL không 0)
+        const payload = buildTradeLogPayload({
+            tradeId,
+            setup,
+            finalEntry,
+            finalSl,
+            finalTp,
+            positionSizeUSD,
+            riskAmountUSD,
+            riskPercentOfCapital,
+            liveCapital,
+            slAlgoId,
+            tpAlgoId
+        });
 
         // Ghi lên Supabase + Bắt lỗi để báo cáo minh bạch
         const { error: dbError } = await supabase.from('trade_logs').insert([payload]);

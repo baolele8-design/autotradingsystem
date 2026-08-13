@@ -15,6 +15,20 @@ export const MTF_LADDER = {
   '1d': { bias: '1w', structure: '1M' }
 };
 
+// LOWER FRAME (2026-08-13, owner directive mục 2): khung nhỏ hơn 1 bậc so
+// với khung lệnh — context-cell telemetry. 15m → null vì 5m bị loại khỏi
+// ladder (D-MTF-4: nguồn lỗ entry WR 28.6%, ref HOÃN protection trigger).
+// Interval lạ/thiếu → null (fail-open). Hàm riêng thay vì thêm key vào
+// MTF_LADDER để giữ shape ladder cũ (regression test Ladder bất biến).
+export const lowerFrameFor = (entryInterval) => {
+  switch (entryInterval) {
+    case '1h': return '15m';
+    case '4h': return '1h';
+    case '1d': return '4h';
+    default: return null;
+  }
+};
+
 export const MTF_VERDICTS = Object.freeze({
   NEUTRAL: 'NEUTRAL',
   STRONG_ALIGNED: 'STRONG_ALIGNED',
@@ -124,6 +138,28 @@ export const evaluateMtfMatrix = ({
     btc1d: normalizeFrame(safeFrames.btc1d)
   };
 
+  // LOWER FRAME (2026-08-13, owner directive mục 2): context-cell
+  // telemetry — normalize RIÊNG, KHÔNG nằm trong frameDirs nên verdict/
+  // counts/neutralVotes giữ nguyên 5 ô gốc (khung nhỏ nhiễu — không phải
+  // phiếu quyết định; nếu tham gia verdict sẽ flip verdict 1 nến).
+  const lowerDir = normalizeFrame(safeFrames.lower);
+
+  const lowerTelemetry = (() => {
+    const raw = safeFrames.lower;
+    if (lowerDir === null || raw === null || raw === undefined) return null;
+    if (typeof raw === 'string') {
+      return { regime: raw, msbState: null, agreesDirection: lowerDir === tradeDir };
+    }
+    if (typeof raw === 'object') {
+      return {
+        regime: typeof raw.regime === 'string' ? raw.regime : null,
+        msbState: typeof raw.msbState === 'string' ? raw.msbState : null,
+        agreesDirection: lowerDir === tradeDir
+      };
+    }
+    return null;
+  })();
+
   const topFrame = TOP_FRAME_PRIORITY.find(name => frameDirs[name] !== null) || null;
   const counterTrendEntry = isCounterTrendEntry(frameDirs.entry, tradeDir);
 
@@ -169,7 +205,7 @@ export const evaluateMtfMatrix = ({
   }
 
   return {
-    frames: frameDirs,
+    frames: { ...frameDirs, lower: lowerDir },
     alignment: {
       countAligned,
       countMisaligned,
@@ -178,7 +214,10 @@ export const evaluateMtfMatrix = ({
       verdict,
       topFrame,
       htfConfirms,
-      counterTrendEntry
+      counterTrendEntry,
+      // LOWER FRAME (2026-08-13): context-cell telemetry — null khi không
+      // có lower (15m entry) hoặc regime null (fail-open).
+      lower: lowerTelemetry
     },
     advice
   };

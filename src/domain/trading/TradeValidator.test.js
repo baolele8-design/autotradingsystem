@@ -173,6 +173,54 @@ test('high VPIN bypass uses strategy policy rather than display text', () => {
   assert.equal(gate(allowed, 'h_vpin').passed, true);
 });
 
+// 2026-08-13 regression: indicator missing giờ persist NULL (không 0) —
+// các hard gate phải FAIL-OPEN khi đọc null, không coerce thành 0
+// (0 = giá trị thật méo: vwapUpper=0 chặn 100% LONG + pass 100% SHORT;
+// cvd=0 fail-open giả; hurst=0 chặn nhầm trend-family).
+test('h_vwap fail-open khi vwapUpper/vwapLower null (không chặn LONG/SHORT)', () => {
+  const longGates = evaluateFixture({
+    direction: 'LONG',
+    autoData: { vwapUpper: null }
+  });
+  const shortGates = evaluateFixture({
+    direction: 'SHORT',
+    strategy: 'ADAPTIVE_SHORT_FALLBACK',
+    autoData: { vwapLower: null }
+  });
+  assert.equal(gate(longGates, 'h_vwap').passed, true, 'LONG phải pass khi vwapUpper null');
+  assert.equal(gate(shortGates, 'h_vwap').passed, true, 'SHORT phải pass khi vwapLower null');
+});
+
+test('h_cvd fail-open khi cvdTrend null (cả 2 hướng)', () => {
+  const longGates = evaluateFixture({
+    direction: 'LONG',
+    autoData: { cvdTrend: null }
+  });
+  const shortGates = evaluateFixture({
+    direction: 'SHORT',
+    strategy: 'ADAPTIVE_SHORT_FALLBACK',
+    autoData: { cvdTrend: null }
+  });
+  assert.equal(gate(longGates, 'h_cvd').passed, true);
+  assert.equal(gate(shortGates, 'h_cvd').passed, true);
+});
+
+test('h_hurst fail-open khi hurstValue null (không chặn trend-family)', () => {
+  const result = evaluateFixture({
+    strategy: getStrategyDefinition('VOL_COMPRESSION_IGNITION'),
+    autoData: { hurstValue: null }
+  });
+  assert.equal(gate(result, 'h_hurst').passed, true, 'hurst null phải pass, không fail-closed');
+});
+
+test('h_hurst vẫn chặn trend-family khi hurst < 0.4 có giá trị thật', () => {
+  const result = evaluateFixture({
+    strategy: getStrategyDefinition('VOL_COMPRESSION_IGNITION'),
+    autoData: { hurstValue: 0.3 }
+  });
+  assert.equal(gate(result, 'h_hurst').passed, false);
+});
+
 test('spot short and stale liquidation event are fail-closed', () => {
   const spotShort = evaluateFixture({
     direction: 'SHORT',
