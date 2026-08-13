@@ -148,14 +148,15 @@ export const TradeValidator = {
     return { score: totalScore, synergyText, penaltyText, checks, checkScores, w, passingScore };
   },
 
-  evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol, strategy = '', resolvedTradeLogs = null) => {
+  evaluateGates: (autoData, apiMacro, vectorDetails, mathCore, direction, tradeType, entry, slTech, systemScore, tradeLogs, symbol, strategy = '', resolvedTradeLogs = null, strategyVersion = null) => {
     const { l1, l2, l3, l5 } = vectorDetails;
     const { score, synergyText, penaltyText, checks, checkScores, passingScore } = systemScore;
-    // B3 (TP1 ~1R) → P0-2 (2026-08-13, critic): requiredRR 1.2/1.0 theo
-    // breakeven — breakeven RR thực 1.37 (WR 0.474, winR 0.508, lossR 0.628);
-    // bước trung gian giữa 0.85 vô nghĩa (chặn 0.4% lệnh) và 1.37
-    // (chặn 15-25% — quyết định sau khi đo F-E1a rejection).
-    const requiredRR = autoData.bbwRank > 80 ? 1.2 : 1.0;
+    // REVERT P0-2 (2026-08-13, owner directive): requiredRR 0.8 FLAT cho
+    // mọi trường hợp. P0-2 (1.2/1.0 theo bbwRank) chặn 100% production vì
+    // h2Realized EV âm (resolved 90d trộn 52% engine v1.3.x đã khai tử);
+    // pre-P0-2/B3 là bbwRank>80 ? 0.8 : 0.7. TP1 ~1R nên yêu cầu 1.2/1.0
+    // loại toàn bộ setup hợp lệ.
+    const requiredRR = 0.8;
 
     const recentLossSameDirection = tradeLogs && tradeLogs.some(log => 
         log.symbol === symbol && 
@@ -233,46 +234,59 @@ export const TradeValidator = {
     // =========================================================================
     // HỆ THỐNG HARD GATES MỚI (BỨC TƯỜNG KỶ LUẬT THÉP)
     // =========================================================================
-    // F4 (P6) → P0-2 (2026-08-13): h2_realized — E[R] thực tế từ resolved logs
-    // THẬT (90 ngày, global-direction — query riêng matrixScannerService,
-    // guard pnl_usd + risk_amount_usd > 0). Nguồn ưu tiên resolvedTradeLogs,
-    // fallback tradeLogs khi caller không cung cấp. Công thức giống scanner
-    // (matrixScannerService.js:496-502): rMultiple = pnl_usd/max(risk_amount_usd,1),
-    // avgWinR/avgLossR rolling (bỏ hằng số 0.50/0.62). n < 30 → null →
-    // plannedEV fallback (hành vi OR cũ).
-    // E_R = WR×avgWinR − (1−WR)×avgLossR.
+    // F4 (P6) → P0-2 → REVERT (2026-08-13, owner directive): h2_realized giờ
+    // CHỈ LÀ TELEMETRY (shadow) — KHÔNG chặn (h2 về OR-gate plannedEV || RR).
+    // Version-scoped: resolved logs được lọc theo strategy_version của
+    // lệnh/setup đang xét (scanner truyền strategyVersion) để KHÔNG trộn
+    // engine v1.3.x đã khai tử (h2 −0.163R, 52% sample resolved) vào EV
+    // engine v1.5.2 hiện tại (−0.035R). Không truyền strategyVersion →
+    // h2Realized = null (an toàn — không chặn).
+    // Lịch sử: F4 (P6) diagnostic n≥5 (hằng 0.50/0.62); P0-2 (2026-08-13)
+    // n≥30 global-direction + AND-gate binding (đã disabled — comment ở h2).
     const resolvedSource = Array.isArray(resolvedTradeLogs)
       ? resolvedTradeLogs
       : (tradeLogs || []);
-    const resolvedSameDirection = resolvedSource.filter(log =>
-      log.direction === direction &&
-      (log.status === 'WIN' || log.status === 'LOSS')
-    );
+    // Normalize version: log thật được persist dạng
+    // withLiquidityFeatureVersion('v1.5.2-auto') → 'v1.5.2-auto|liquidity-v2'
+    // (autoBot.js:474); scanner truyền 'v1.5.2-auto' (engine hiện tại) hoặc
+    // pLog.strategy_version (lệnh pending). Bỏ tag '|...' + suffix '-auto'.
+    const versionKey = (v) =>
+      String(v ?? '').trim().split('|')[0].trim().replace(/-auto$/i, '');
     let h2Realized = null;
-    if (resolvedSameDirection.length >= 30) {
-      const realizedWinCount = resolvedSameDirection.filter(
-        log => log.status === 'WIN'
-      ).length;
-      const realizedWinRate =
-        realizedWinCount / resolvedSameDirection.length;
-      const realizedLossCount =
-        resolvedSameDirection.length - realizedWinCount;
-      const realizedWinRTotal = resolvedSameDirection
-        .filter(log => log.status === 'WIN')
-        .reduce((sum, log) =>
-          sum + (parseFloat(log.pnl_usd) || 0) /
-            (parseFloat(log.risk_amount_usd) || 1), 0);
-      const realizedLossRTotal = resolvedSameDirection
-        .filter(log => log.status === 'LOSS')
-        .reduce((sum, log) =>
-          sum + Math.abs(parseFloat(log.pnl_usd) || 0) /
-            (parseFloat(log.risk_amount_usd) || 1), 0);
-      const avgWinR =
-        realizedWinCount > 0 ? realizedWinRTotal / realizedWinCount : 0;
-      const avgLossR =
-        realizedLossCount > 0 ? realizedLossRTotal / realizedLossCount : 0;
-      h2Realized =
-        realizedWinRate * avgWinR - (1 - realizedWinRate) * avgLossR;
+    let h2Telemetry = null;
+    if (strategyVersion) {
+      const targetKey = versionKey(strategyVersion);
+      const versionResolved = resolvedSource.filter(log =>
+        log.direction === direction &&
+        (log.status === 'WIN' || log.status === 'LOSS') &&
+        versionKey(log.strategy_version) === targetKey
+      );
+      if (versionResolved.length >= 30) {
+        const realizedWinCount = versionResolved.filter(
+          log => log.status === 'WIN'
+        ).length;
+        const realizedWinRate =
+          realizedWinCount / versionResolved.length;
+        const realizedLossCount =
+          versionResolved.length - realizedWinCount;
+        const realizedWinRTotal = versionResolved
+          .filter(log => log.status === 'WIN')
+          .reduce((sum, log) =>
+            sum + (parseFloat(log.pnl_usd) || 0) /
+              (parseFloat(log.risk_amount_usd) || 1), 0);
+        const realizedLossRTotal = versionResolved
+          .filter(log => log.status === 'LOSS')
+          .reduce((sum, log) =>
+            sum + Math.abs(parseFloat(log.pnl_usd) || 0) /
+              (parseFloat(log.risk_amount_usd) || 1), 0);
+        const avgWinR =
+          realizedWinCount > 0 ? realizedWinRTotal / realizedWinCount : 0;
+        const avgLossR =
+          realizedLossCount > 0 ? realizedLossRTotal / realizedLossCount : 0;
+        h2Realized =
+          realizedWinRate * avgWinR - (1 - realizedWinRate) * avgLossR;
+        h2Telemetry = { n: versionResolved.length, version: strategyVersion };
+      }
     }
 
     // P1-2 (2026-08-13): spread cap theo asset tier — đồng bộ
@@ -302,12 +316,21 @@ export const TradeValidator = {
       { id: 'h_cd', passed: !recentLossSameDirection, text: `COOLDOWN: Không nhồi lệnh cùng hướng ${direction} sau khi bị SL.` },
       { id: 'h_spot_short', passed: tradeType !== 'SPOT' || direction === 'LONG', text: `SPOT DIRECTION: Không thể mở vị thế SHORT trên Spot.` },
       { id: 'h1', passed: spreadSafe && slTech > 0 && Math.abs(entry - slTech) > (autoData.atr14 * 0.4), text: `CHỐNG NHIỄU: SL > 0.4 ATR + spread < ${spreadCap}%` },
-      // P0-2 (critic): AND-gate khi realizedReady — realized EV binding,
-      // không escape qua cửa RR. n < 30 → hành vi cũ (OR plannedEV || RR).
-      { id: 'h2', passed: h2Realized !== null
-          ? (h2Realized > -0.05 && parseFloat(mathCore.theoreticalRR) >= requiredRR)
-          : (parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR),
-        h2_realized: h2Realized, text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
+      // REVERT P0-2 (2026-08-13, owner directive): h2 về OR-gate
+      // plannedEV || RR — h2Realized KHÔNG còn trong điều kiện pass
+      // (telemetry only — gate OR).
+      //
+      // P0-2 AND-gate (disabled 2026-08-13 owner directive: production 100%
+      // block; giữ làm tài liệu + tái-binding sau khi data sạch):
+      //   passed: h2Realized !== null
+      //     ? (h2Realized > -0.05 && parseFloat(mathCore.theoreticalRR) >= requiredRR)
+      //     : (parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR),
+      //
+      { id: 'h2',
+        passed: parseFloat(mathCore.trueEVValue) > -0.05 || parseFloat(mathCore.theoreticalRR) >= requiredRR,
+        h2_realized: h2Realized,
+        h2_telemetry: h2Telemetry,
+        text: `KỲ VỌNG: R:R >= ${requiredRR} hoặc EV Dương` },
       { id: 'h4', passed: tradeType === 'SPOT' || (mathCore.liqEstimate && !mathCore.leverageExceedsExchangeCap && mathCore.liqSafetyMargin >= 1.3), text: `ĐỆM THANH LÝ: An toàn Margin` },
       { id: 'h6', passed: autoData.lastClosedVolume >= (autoData.avgVolume20 * 0.4), text: `VOL DEADZONE: Thanh khoản ổn định` },
       { id: 'h_msb', passed: !isMsbContradictory, text: `MARKET STRUCTURE: Cấm giao dịch khi cấu trúc MSB đảo chiều ngược hướng lệnh.` },

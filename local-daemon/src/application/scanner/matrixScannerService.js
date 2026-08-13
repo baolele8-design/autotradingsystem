@@ -17,6 +17,13 @@ import {
   withLiquidityFeatureVersion
 } from '../../../../src/domain/analytics/quant/liquidityMetadata.js';
 import { TradeValidator } from '../../../../src/domain/trading/TradeValidator.js';
+
+// REVERT P0-2 (2026-08-13, owner directive): version engine hiện tại —
+// đồng bộ với autoBot.js:474-476 (withLiquidityFeatureVersion('v1.5.2-auto')
+// ghi trade_logs.strategy_version khi mở lệnh). Truyền vào evaluateGates
+// để h2_realized (TELEMETRY only — gate OR) chỉ tính trên resolved logs
+// cùng version, không trộn engine v1.3.x đã khai tử.
+const CURRENT_ENGINE_STRATEGY_VERSION = 'v1.5.2-auto';
 import {
   isNewEntrySymbolAllowed
 } from '../../../../src/domain/trading/symbolEntryPolicy.js';
@@ -903,7 +910,15 @@ btcReturnsCache.clear();
                                       ? { ...pendingStrategy, assetTier: pLog.asset_tier || '' }
                                       : { strategyId: stratNameClean, assetTier: pLog.asset_tier || '' };
 
-                              const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategyForGates, resolvedTradeLogsClean);
+                              const pLogGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mockMathCore, pLogDir, pLogTradeType, pLogEntry, pLogSl, pLogScore, coinLogs, symbol, pendingStrategyForGates, resolvedTradeLogsClean, pLog.strategy_version);
+
+                              // REVERT P0-2 (2026-08-13): h2_realized telemetry
+                              // (shadow — gate OR, không chặn). Log per-candidate
+                              // khi validator tính được (n ≥ 30 cùng version).
+                              const h2PendingGate = pLogGates.hardGates.find(g => g.id === 'h2');
+                              if (h2PendingGate?.h2_telemetry) {
+                                  console.log(`[H2 REALIZED] direction=${pLogDir} version=${h2PendingGate.h2_telemetry.version} n=${h2PendingGate.h2_telemetry.n} EV=${h2PendingGate.h2_realized.toFixed(3)}R (telemetry only — gate OR)`);
+                              }
   
                               // 3. RA QUYẾT ĐỊNH
                               if (!pLogGates.isApproved) {
@@ -1386,11 +1401,19 @@ regime_at_entry: vectorDetails?.l2 || autoData?.l2 || null,
                               };
   
                               let finalTradeType = 'FUTURES';
-                              let gates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'FUTURES', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean);
+                              let gates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'FUTURES', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean, CURRENT_ENGINE_STRATEGY_VERSION);
+                              
+                              // REVERT P0-2 (2026-08-13): h2_realized telemetry
+                              // (shadow — gate OR, không chặn). Log per-candidate
+                              // khi validator tính được (n ≥ 30 cùng version).
+                              const h2MainGate = gates.hardGates.find(g => g.id === 'h2');
+                              if (h2MainGate?.h2_telemetry) {
+                                  console.log(`[H2 REALIZED] direction=${direction} version=${h2MainGate.h2_telemetry.version} n=${h2MainGate.h2_telemetry.n} EV=${h2MainGate.h2_realized.toFixed(3)}R (telemetry only — gate OR)`);
+                              }
                               
                               // Nếu Futures tịt vì Margin (Gate H4), thử nảy qua SPOT xem pass không!
                               if (direction === 'LONG' && !gates.isApproved && gates.hardGates.find(g => g.id === 'h4' && !g.passed)) {
-                                  const spotGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'SPOT', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean);
+                                  const spotGates = TradeValidator.evaluateGates(autoData, apiMacro, vectorDetails, mathCoreReal, direction, 'SPOT', suggestedEntry, slTech, systemScoreTmp, tradeLogs || [], symbol, targetInfo, resolvedTradeLogsClean, CURRENT_ENGINE_STRATEGY_VERSION);
                                   if (spotGates.isApproved) {
                                       gates = spotGates;
                                       finalTradeType = 'SPOT';

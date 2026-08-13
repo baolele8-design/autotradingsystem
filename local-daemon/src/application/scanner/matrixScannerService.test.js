@@ -945,11 +945,24 @@ test('F-E2b (f): payload slApplied phản ánh SL thật đang dùng (STRUCTURE|
 });
 
 // =====================================================================
-// P0-2 (2026-08-13): resolved logs 90d (WIN/LOSS) phải được truyền vào
-// evaluateGates — h2 AND-gate chặn setup khi realized EV âm.
+// REVERT P0-2 (2026-08-13, owner directive): resolved logs 90d được truyền
+// vào evaluateGates (kèm strategyVersion) — h2_realized CHỈ telemetry
+// (OR-gate, không chặn). 40 LOSS cùng version → h2_realized = −0.5 tính
+// shadow NHƯNG LONG setup vẫn được tạo (rr ≥ 0.8 / EV tốt trong fixture).
 // =====================================================================
-test('P0-2 e2e: resolved 90d toàn LOSS cùng hướng (n=40 ≥ 30) → h2 AND-gate chặn LONG setup', async () => {
-  // close_time 3h (ngoài cooldown h_cd 2h) → chỉ h2 là nguồn chặn LONG.
+test('REVERT P0-2 e2e: resolved 90d toàn LOSS cùng version (n=40 ≥ 30) → h2_realized telemetry, h2 OR-gate KHÔNG chặn LONG setup', async () => {
+  // 12h query trả WIN (winRate 1 → EV dương → h2 pass qua cửa EV);
+  // 90d query trả 40 LOSS cùng version (h2Realized = −0.5 telemetry only —
+  // nếu P0-2 AND-gate còn binding, LONG bị chặn như test cũ chứng minh).
+  const winRows = Array.from({ length: 40 }, (_, i) => ({
+    id: `win-${i}`,
+    symbol: 'BTCUSDT',
+    status: 'WIN',
+    direction: 'LONG',
+    pnl_usd: 3 + (i % 5),
+    risk_amount_usd: 1,
+    created_at: new Date(Date.now() - i * 60_000).toISOString()
+  }));
   const lossRows = Array.from({ length: 40 }, (_, i) => ({
     id: `loss-${i}`,
     symbol: 'BTCUSDT',
@@ -957,27 +970,43 @@ test('P0-2 e2e: resolved 90d toàn LOSS cùng hướng (n=40 ≥ 30) → h2 AND-
     direction: 'LONG',
     pnl_usd: -10,
     risk_amount_usd: 20,
+    strategy_version: 'v1.5.2-auto|liquidity-v2',
     close_time: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
   }));
-  const lossChain = {
-    select: () => lossChain,
-    or: () => lossChain,
+  const resolvedChain = {
+    select: () => resolvedChain,
+    or: () => resolvedChain,
     order: async () => ({ data: lossRows, error: null })
   };
+  const twelveHourChain = {
+    select: () => twelveHourChain,
+    or: () => twelveHourChain,
+    order: async () => ({ data: winRows, error: null })
+  };
+  const splitChain = {
+    select: () => splitChain,
+    or: (filters) => String(filters || '').includes('WIN')
+      ? resolvedChain
+      : twelveHourChain,
+    order: async () => ({ data: winRows, error: null })
+  };
   const { svc, getResults } = scanMockContext({
-    supabase: { from: () => lossChain }
+    supabase: { from: () => splitChain }
   });
   await svc.runMatrixScanner();
   const setups = getResults()[0].data;
-  // h2Realized LONG = 0×avgWinR − 1×0.5 = −0.5 ≤ −0.05 → AND-gate fail
-  // (bất kể rr/EV) → mọi LONG setup bị chặn; SHORT vốn bị h_msb chặn
-  // trong fixture uptrend (Bullish_MSB).
-  assert.equal(
-    setups.filter(s => s.direction === 'LONG').length,
-    0,
-    `resolved 40 LOSS → LONG h2 phải chặn, còn ${setups.filter(s => s.direction === 'LONG').length} LONG setup`
+  // h2Realized LONG = 0×avgWinR − 1×0.5 = −0.5 (telemetry only) — OR-gate
+  // không chặn (EV dương từ 12h data). LONG setup phải xuất hiện; dưới
+  // P0-2 AND-gate test này (cùng fixture) chặn sạch LONG.
+  assert.ok(
+    setups.filter(s => s.direction === 'LONG').length > 0,
+    `resolved 40 LOSS → h2 OR-gate không được chặn LONG, thấy ${setups.filter(s => s.direction === 'LONG').length} LONG setup`
   );
+  // Payload không đổi: candidate vẫn mang strategyVersion (contract cũ).
+  for (const setup of setups.filter(s => s.direction === 'LONG')) {
+    assert.ok('strategyVersion' in setup, 'candidate payload phải giữ strategyVersion');
+  }
 });
 
 // =====================================================================
