@@ -12,6 +12,9 @@ import {
 import {
   evaluateNewEntrySymbol
 } from '../../../../src/domain/trading/symbolEntryPolicy.js';
+import {
+  registerLedgerRoutes
+} from './ledgerBridge.js';
 
 const rejectExecution = (status, code, error) => ({
   ok: false,
@@ -110,6 +113,7 @@ export function validateLiveExecutionStrategy({
 export function registerRoutes(context) {
   const {
     app,
+    broadcastLedgerChanged,
     cancelExactOrder,
     geminiApiKey: GEMINI_API_KEY,
     getMvrvState,
@@ -120,6 +124,7 @@ export function registerRoutes(context) {
     sendBinanceReq,
 sendSpotBinanceReq,
     setGlobalMvrvZScore,
+    supabase,
     withSymbolOrderLock,
     getBtcRegimeSnapshot
   } = context;
@@ -385,7 +390,7 @@ sendSpotBinanceReq,
       } catch (err) { res.status(500).json({ error: err.message }); }
   });
   
-  app.delete('/api/cancel-all', async (req, res) => {
+app.delete('/api/cancel-all', async (req, res) => {
       try {
           const { symbol } = req.body;
           if (!symbol) return res.status(400).json({ error: "Thiếu symbol." });
@@ -395,4 +400,6 @@ sendSpotBinanceReq,
           return res.status(500).json({ error: 'Failed to clear orders', details: { msg: error.message } });
       }
   });
+
+  registerLedgerRoutes({ app, supabase, broadcastLedgerChanged });
 }

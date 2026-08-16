@@ -1,3 +1,5 @@
+import { insertPaperLogs } from '../../../shared/ledgerClient.js';
+
 export function selectPaperSimulationSetups(scannedTopSetups, limit = 10) {
     const setups = Array.isArray(scannedTopSetups)
         ? scannedTopSetups
@@ -17,8 +19,7 @@ export async function createTopPaperTrades(context) {
     scannedTopSetups,
     showToast,
     liveCapital,
-    tradeSetup,
-    supabase
+    tradeSetup
   } = context;
     if (!scannedTopSetups || scannedTopSetups.length === 0 || scannedTopSetups[0].isEmpty) {
         showToast("⚠️ Không có Setup hợp lệ trên Radar để đánh ảo!");
@@ -65,7 +66,7 @@ export async function createTopPaperTrades(context) {
     });
 
     try {
-        const { error } = await supabase.from('paper_trade_logs').insert(paperLogs);
+        const { error } = await insertPaperLogs(paperLogs);
         if (error) throw error;
         showToast(`✅ Đã phóng thành công ${paperLogs.length} lệnh vào Vũ Trụ Ảo!`);
     } catch (err) {

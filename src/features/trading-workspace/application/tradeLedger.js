@@ -7,13 +7,16 @@ import { numberOrNull } from '../../../domain/analytics/quant/indicatorPersisten
 import {
   decideExitReasonUpdate
 } from './tradeLedgerExitReason.js';
+import {
+  insertTradeLog,
+  updateTradeLog
+} from '../../../shared/ledgerClient.js';
 
 export async function saveTradeLog(
   context,
   executionMetrics = { latency: 0, slippage: 0, exactEntry: null }
 ) {
   const {
-    supabase,
     autoData,
     symbol,
     apiMacro,
@@ -30,7 +33,6 @@ export async function saveTradeLog(
     setTradeLogs,
     showToast
   } = context;
-    if (!supabase) return;
     if (tradeSetup.strategyRolloutMode === 'PAPER_ONLY') {
       showToast('🧪 Chiến thuật mới đang ở PAPER/SHADOW; hãy dùng sổ Paper để thu thập mẫu.');
       return;
@@ -142,9 +144,9 @@ export async function saveTradeLog(
         pee_analyzed: false
       };
       
-      const { data, error } = await supabase.from('trade_logs').insert([payload]).select();
+      const { data, error } = await insertTradeLog(payload);
       if (error) {
-          console.error("Lỗi Supabase Detail:", error);
+          console.error("Lỗi Lưu Sổ:", error);
           throw error;
       }
       if (data && data.length > 0) setTradeLogs(current => [data[0], ...current].slice(0, 300));
@@ -156,13 +158,12 @@ export async function saveTradeLog(
 
 export async function syncBinanceLedger(context, isSilent = false) {
   const {
-    supabase,
     tradeLogs,
     setIsSyncing,
     showToast,
     fetchTradeLogs
   } = context;
-    if (!supabase || !tradeLogs || tradeLogs.length === 0) return;
+    if (!tradeLogs || tradeLogs.length === 0) return;
     setIsSyncing(true);
     
     try {
@@ -297,10 +298,7 @@ export async function syncBinanceLedger(context, isSilent = false) {
                        openUpdate.initial_risk_per_coin =
                          initialRiskPerCoin;
                      }
-                     await supabase
-                       .from('trade_logs')
-                       .update(openUpdate)
-                       .eq('id', log.id);
+                     await updateTradeLog(log.id, openUpdate);
                      updatedCount++;
                  }
               } 
@@ -380,7 +378,7 @@ export async function syncBinanceLedger(context, isSilent = false) {
                     }
                     // =========================================================
            
-                    await supabase.from('trade_logs').update({ 
+                    await updateTradeLog(log.id, { 
                         status: finalIsolatedPnl > 0 ? 'WIN' : 'LOSS', 
                         pnl_usd: finalIsolatedPnl, 
                         close_price: exitPrice,
@@ -391,13 +389,12 @@ export async function syncBinanceLedger(context, isSilent = false) {
                         max_adverse_excursion_usd: maxMaeUsd,
                         actual_holding_cycles: actualHoldingCycles,
                         metric_version: 'ui-ledger-excursion/v2'
-                    })
+                    }, 
                     // A1-2 RACE CLOSE: chỉ ghi khi row hiện tại exit_reason còn
                     // NULL hoặc MANUAL_CLOSE. Nếu daemon reconcile đã resolve
                     // trước đó (ghi reason thật), filter này không match row
                     // nào → UI không thể ghi đè reason/trạng thái của daemon.
-                    .or('exit_reason.is.null,exit_reason.eq.MANUAL_CLOSE')
-                    .eq('id', log.id);
+                    'exit_reason.is.null,exit_reason.eq.MANUAL_CLOSE');
                     
                     updatedCount++;
 
@@ -416,13 +413,13 @@ export async function syncBinanceLedger(context, isSilent = false) {
                     
                     const fallbackStatus = rawIsolatedPnl > 0 ? 'WIN' : (rawIsolatedPnl < 0 ? 'LOSS' : 'CANCELED');
 
-                    await supabase.from('trade_logs').update({ 
+                    await updateTradeLog(log.id, { 
                         status: fallbackStatus, 
                         pnl_usd: rawIsolatedPnl, 
                         exit_reason: log.exit_reason || 'FORCE_SYNC_RESOLVED', 
                         close_time: log.close_time || new Date().toISOString(),
                         pee_analyzed: false
-                    }).eq('id', log.id);
+                    });
                     
                     updatedCount++;
                  }
@@ -466,7 +463,7 @@ export async function syncBinanceLedger(context, isSilent = false) {
                                 // Tự động xác định xem SL mới đã là mốc An Toàn chưa
                                 const isSafe = log.direction === 'LONG' ? liveSlPrice >= parseFloat(log.entry) : liveSlPrice <= parseFloat(log.entry);
                                 
-                                 await supabase.from('trade_logs').update({ 
+                                 await updateTradeLog(log.id, { 
                                      sl: liveSlPrice,
                                      trailing_activated: isSafe || log.trailing_activated,
                                      protection_stage: isSafe
@@ -474,17 +471,17 @@ export async function syncBinanceLedger(context, isSilent = false) {
                                          : (log.protection_stage || 'NONE'),
                                      max_favorable_excursion_usd: newMfe,
                                     max_adverse_excursion_usd: newMae
-                                }).eq('id', log.id);
+                                });
                                 requiresUpdate = false; // Đã gom update, ko cần update rời nữa
                             }
                         }
                     }
 
                     if (requiresUpdate) {
-                        await supabase.from('trade_logs').update({ 
+                        await updateTradeLog(log.id, { 
                             max_favorable_excursion_usd: newMfe, 
                             max_adverse_excursion_usd: newMae 
-                        }).eq('id', log.id);
+                        });
                     }
                  }
               }

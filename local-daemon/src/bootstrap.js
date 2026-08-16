@@ -173,7 +173,7 @@ const { syncHUD } = createHudService({
     staticExchangeCache
 });
 
-const { getConnectedClients } = createWebSocketHub({
+const { broadcast, getConnectedClients } = createWebSocketHub({
     marketDataCache,
     syncHUD,
     wss
@@ -241,6 +241,7 @@ const { runOrphanCleanupEngine } = createOrphanCleanupService({
 
 registerRoutes({
     app,
+    broadcastLedgerChanged: broadcast,
     cancelExactOrder,
     geminiApiKey: GEMINI_API_KEY,
     getMvrvState,
@@ -251,6 +252,7 @@ registerRoutes({
     sendBinanceReq,
     sendSpotBinanceReq,
 setGlobalMvrvZScore,
+    supabase,
     withSymbolOrderLock,
     getBtcRegimeSnapshot
 });

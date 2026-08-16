@@ -49,7 +49,17 @@ export function createWebSocketHub({
     });
   });
 
+  const broadcast = message => {
+    const data = JSON.stringify(message);
+    for (const client of connectedClients) {
+      if (client.readyState === 1) {
+        client.send(data);
+      }
+    }
+  };
+
   return {
+    broadcast,
     getConnectedClients: () => connectedClients
   };
 }

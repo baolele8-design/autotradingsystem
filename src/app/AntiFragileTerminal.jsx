@@ -2,7 +2,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrainCircuit, Activity, Loader2, ServerCrash, Bell, Server, Zap } from 'lucide-react';
 
-import { supabase } from '../infrastructure/supabase/client.js';
+import {
+  fetchTradeLogs as fetchTradeLogsFromBridge
+} from '../shared/ledgerClient.js';
 
 import useLiveData from '../features/market-data/hooks/useLiveData.js';
 import useMatrixScanner from '../features/scanner/hooks/useMatrixScanner.js';
@@ -109,21 +111,38 @@ export default function AntiFragileTerminal() {
   }, [mvrvSource, mvrvZScore]);
   
   const fetchTradeLogs = async () => {
-    if (!supabase) return;
     try {
-      const { data, error } = await supabase.from('trade_logs').select('*').order('created_at', { ascending: false }).limit(300);
+      const { data, error } = await fetchTradeLogsFromBridge(300);
       if (!error && data) setTradeLogs(data);
     } catch (err) { console.error(err); }
   };
 
   useEffect(() => {
     fetchTradeLogs();
-    const subscription = supabase.channel('public:trade_logs').on('postgres_changes', { event: '*', schema: 'public', table: 'trade_logs' }, (payload) => {
-        if (payload.eventType === 'INSERT') setTradeLogs(current => [payload.new, ...current].slice(0, 300));
-        else if (payload.eventType === 'UPDATE') setTradeLogs(current => current.map(log => log.id === payload.new.id ? payload.new : log));
-        else if (payload.eventType === 'DELETE') setTradeLogs(current => current.filter(log => log.id !== payload.old.id));
-      }).subscribe();
-    return () => supabase.removeChannel(subscription);
+    const host = typeof window !== 'undefined' && window.location.hostname
+      ? window.location.hostname
+      : 'localhost';
+    let ws;
+    let reconnectTimer;
+    const connect = () => {
+      ws = new WebSocket(`ws://${host}:1338`);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'LEDGER_CHANGED') fetchTradeLogs();
+        } catch (e) { /* bỏ qua tin không parse được */ }
+      };
+      ws.onclose = () => {
+        reconnectTimer = setTimeout(connect, 5000);
+      };
+    };
+    connect();
+    const pollTimer = setInterval(fetchTradeLogs, 20000);
+    return () => {
+      clearInterval(pollTimer);
+      clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -259,7 +278,6 @@ export default function AntiFragileTerminal() {
   const handleSaveTradeLog = executionMetrics =>
     saveTradeLog(
       {
-        supabase,
         autoData,
         symbol,
         apiMacro,
@@ -282,7 +300,6 @@ export default function AntiFragileTerminal() {
   const syncBinanceToSupabase = (isSilent = false) =>
     syncBinanceLedger(
       {
-        supabase,
         tradeLogs,
         setIsSyncing,
         showToast,
@@ -310,8 +327,7 @@ export default function AntiFragileTerminal() {
       scannedTopSetups,
       showToast,
       liveCapital,
-      tradeSetup,
-      supabase
+      tradeSetup
     });
 
   const injectScannedSetup = setup =>

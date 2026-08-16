@@ -1,6 +1,6 @@
 // FILE: src/hooks/useLiveData.js
 import { useState, useEffect } from 'react';
-import { supabase } from '../../../infrastructure/supabase/client.js'; // Import thêm Supabase
+import { fetchLatestModel } from '../../../shared/ledgerClient.js';
 
 export default function useLiveData({
   symbol,
@@ -25,21 +25,19 @@ export default function useLiveData({
   // STATE MỚI: CHỨA NÃO BỘ TỐI ƯU
   const [aiModel, setAiModel] = useState(null);
 
-  // KÉO MODEL TỪ SUPABASE (Chạy 1 lần khi load app)
+  // KÉO MODEL TỪ DAEMON QUA LEDGER BRIDGE (Chạy 1 lần khi load app)
   useEffect(() => {
-    const fetchLatestModel = async () => {
-        if (!supabase) return;
-        const { data, error } = await supabase
-            .from('system_models')
-            .select('model_data')
-            .order('created_at', { ascending: false })
-            .limit(1);
-            
-        if (!error && data && data.length > 0) {
-            setAiModel(data[0].model_data);
+    const loadModel = async () => {
+        try {
+            const { data, error } = await fetchLatestModel();
+            if (!error && data) {
+                setAiModel(data);
+            }
+        } catch (e) {
+            console.warn('[AI MODEL] Không lấy được model qua bridge:', e.message);
         }
     };
-    fetchLatestModel();
+    loadModel();
   }, []);
 
   // LUỒNG 1: NHẬN STREAM DỮ LIỆU ĐÃ TÍNH TOÁN SẴN TỪ DAEMON

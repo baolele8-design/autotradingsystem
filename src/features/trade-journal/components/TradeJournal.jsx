@@ -1,7 +1,7 @@
 // File: src/components/terminal/TradeJournal.jsx
 import React, { useMemo } from 'react';
 import { History, RefreshCw, CheckCircle2, XCircle, TrendingUp, TrendingDown, Clock, Link, AlertTriangle, Trash2, Calculator, CalendarDays, Trophy } from 'lucide-react';
-import { supabase } from '../../../infrastructure/supabase/client.js';
+import { deleteTradeLog } from '../../../shared/ledgerClient.js';
 import { getTrailingPolicy } from '../../../domain/trading/trailingPolicy.js';
 
 const findPositionForLog = (positions, log) => positions.find(position => {
@@ -214,7 +214,7 @@ export default function TradeJournal({ tradeLogs, currentPrice, syncBinanceToSup
         const cancelData = await cancelRes.json();
         if (!cancelRes.ok) throw new Error(cancelData.details?.msg || cancelData.error || "Lỗi Bridge Cục bộ");
       }
-      const { error } = await supabase.from('trade_logs').delete().eq('id', log.id);
+      const { error } = await deleteTradeLog(log.id);
       if (error) throw error;
     } catch (err) {
       alert("Lỗi khi hủy/xóa lệnh: " + err.message);

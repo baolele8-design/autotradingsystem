@@ -82,6 +82,7 @@ test('execute-batch rejects rollout mismatch before any Binance mutation', async
   const app = {
     post: (path, handler) => handlers.set(`POST ${path}`, handler),
     get: (path, handler) => handlers.set(`GET ${path}`, handler),
+    patch: (path, handler) => handlers.set(`PATCH ${path}`, handler),
     delete: (path, handler) => handlers.set(`DELETE ${path}`, handler)
   };
   let binanceMutationCount = 0;
@@ -149,6 +150,7 @@ test('execute-batch rejects a blocked new-entry symbol before any Binance mutati
     app: {
       post: (path, handler) => handlers.set(`POST ${path}`, handler),
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      patch: (path, handler) => handlers.set(`PATCH ${path}`, handler),
       delete: (path, handler) => handlers.set(`DELETE ${path}`, handler)
     },
     getMvrvState: () => ({}),
@@ -189,6 +191,7 @@ test('execute-batch sends accepted Futures orders only through the gateway', asy
     app: {
       post: (path, handler) => handlers.set(`POST ${path}`, handler),
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      patch: (path, handler) => handlers.set(`PATCH ${path}`, handler),
       delete: (path, handler) => handlers.set(`DELETE ${path}`, handler)
     },
     cancelExactOrder: async () => {},
@@ -241,6 +244,7 @@ test('Binance proxy rejects arbitrary origins and routes public reads via safeFe
     app: {
       post: (path, handler) => handlers.set(`POST ${path}`, handler),
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
+      patch: (path, handler) => handlers.set(`PATCH ${path}`, handler),
       delete: (path, handler) => handlers.set(`DELETE ${path}`, handler)
     },
     getMvrvState: () => ({}),
@@ -301,6 +305,7 @@ test('GET /api/btc-regime returns the scanner regime snapshot', async () => {
     app: {
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
       post: () => {},
+      patch: () => {},
       delete: () => {}
     },
     getBtcRegimeSnapshot: () => ({
@@ -330,6 +335,7 @@ test('GET /api/btc-regime fails open when snapshot getter is absent', async () =
     app: {
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
       post: () => {},
+      patch: () => {},
       delete: () => {}
     }
   });
@@ -349,9 +355,10 @@ test('GET /api/btc-regime fails open when snapshot getter is absent', async () =
 test('GET /api/btc-regime reads .regime from object cache entries', async () => {
   const handlers = new Map();
   registerRoutes({
-    app: {
+app: {
       get: (path, handler) => handlers.set(`GET ${path}`, handler),
       post: () => {},
+      patch: () => {},
       delete: () => {}
     },
     getBtcRegimeSnapshot: () => buildBtcRegimeSnapshot({
