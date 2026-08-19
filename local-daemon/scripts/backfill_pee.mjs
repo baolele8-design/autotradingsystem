@@ -62,6 +62,16 @@ async function countRipe() {
 
 const batchSize = Number.parseInt(process.env.PEE_BACKFILL_BATCH || '200', 10);
 const maxRounds = Number.parseInt(process.env.PEE_BACKFILL_MAX_ROUNDS || '50', 10);
+
+// Cold-start probe: coordinator bắt đầu ở RATE_STATE_WARMING và chỉ cho phép
+// một request reconciliation (weight-1) đi qua để lấy response headers làm
+// mốc "initialObservationReady" (giống bootstrap.js:87-90). Thiếu bước này thì
+// mọi klines đều bị deny RATE_STATE_WARMING.
+await safeFetch(
+  'https://fapi.binance.com/fapi/v1/time',
+  { maxRetries: 0, priority: 'reconciliation', ttlMs: 0 }
+);
+
 const service = createPostTradeEvaluationService({ batchSize, safeFetch, supabase });
 
 const before = await countRipe();

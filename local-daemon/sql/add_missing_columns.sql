@@ -26,3 +26,8 @@ ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mae_usd NUMERIC;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mfe_candles INTEGER;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS pee_mae_candles INTEGER;
 ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS oi_spike BOOLEAN;
+
+-- 2026-08-19: PEE window gio co dinh 2-3 nen theo khung lenh (directive owner).
+-- Mo rong CHECK bound tu [6,24] xuong [2,24] de cho phep pee_window_candles=3.
+ALTER TABLE trade_logs DROP CONSTRAINT IF EXISTS trade_logs_pee_window_candles_bounded;
+ALTER TABLE trade_logs ADD CONSTRAINT trade_logs_pee_window_candles_bounded CHECK ((pee_window_candles IS NULL) OR (pee_window_candles >= 2 AND pee_window_candles <= 24));
