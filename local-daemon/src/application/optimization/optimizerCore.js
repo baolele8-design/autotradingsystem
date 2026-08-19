@@ -16,10 +16,14 @@ import {
   STRATEGY_TARGET_SCOPE,
   STRATEGY_TIER_MIN_SAMPLES
 } from '../../../../src/domain/trading/strategyOptimizationPolicy.js';
+import {
+  PEE_POLICY_VERSION as SUPPORTED_PEE_POLICY_VERSION
+} from '../analytics/postTradeEvaluationService.js';
+
+export { SUPPORTED_PEE_POLICY_VERSION };
 
 export const OPTIMIZER_VERSION = '2.4.0';
 export const MODEL_SCHEMA_VERSION = 'strategy-tier-targets-path/v5';
-export const SUPPORTED_PEE_POLICY_VERSION = 'pee-planned-hold-v1';
 export const TARGET_SCOPE = STRATEGY_TARGET_SCOPE;
 export const MIN_MATRIX_SAMPLES = STRATEGY_TIER_MIN_SAMPLES;
 export const SHRINKAGE_PRIOR_STRENGTH = 30;

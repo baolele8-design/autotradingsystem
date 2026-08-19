@@ -1,9 +1,13 @@
-export const PEE_POLICY_VERSION = 'pee-planned-hold-v1';
+export const PEE_POLICY_VERSION = 'pee-window-3c-v2';
 
-export function calculatePeeWindowCandles(plannedHoldingCycles) {
-  const planned = Number(plannedHoldingCycles);
-  if (!Number.isFinite(planned) || planned <= 0) return null;
-  return Math.min(24, Math.max(6, Math.round(planned * 1.5)));
+// PEE window cố định 2-3 nến theo khung lệnh (owner directive 2026-08-19).
+// Ngắn lại so với phiên bản cũ (min(24, max(6, round(holding x 1.5))) = 6-24 nến)
+// để kết quả PEE có sẵn nhanh hơn — 1d -> 3 ngày, 4h -> 12 giờ, 1h -> 3 giờ, 15m -> 45 phút.
+// KHÔNG phụ thuộc holding cycles -> backfill được cho mọi lệnh (kể cả thiếu planned_holding_cycles).
+export const PEE_WINDOW_CANDLES = 3;
+
+export function calculatePeeWindowCandles() {
+  return PEE_WINDOW_CANDLES;
 }
 
 export function getPeeWindowBounds(closeTimeMs, intervalMs, windowCandles) {
@@ -33,8 +37,7 @@ export function createPostTradeEvaluationService(context) {
                   `pee_policy_version.is.null,` +
                   `pee_policy_version.neq.${PEE_POLICY_VERSION}`
               )
-              .not('close_time', 'is', null)
-              .not('planned_holding_cycles', 'is', null)
+.not('close_time', 'is', null)
               .order('close_time', { ascending: true })
               .limit(batchSize);
 
@@ -54,17 +57,8 @@ export function createPostTradeEvaluationService(context) {
                   );
                   continue;
               }
-              const intervalMs = INTERVAL_MS[trade.interval] || 3600000;
-              const peeWindowCandles = calculatePeeWindowCandles(
-                  trade.planned_holding_cycles
-              );
-              if (peeWindowCandles === null) {
-                  console.error(
-                      `[PEE SKIP] ${trade.symbol} row=${trade.id} ` +
-                      'thiếu planned_holding_cycles hợp lệ.'
-                  );
-                  continue;
-              }
+const intervalMs = INTERVAL_MS[trade.interval] || 3600000;
+              const peeWindowCandles = calculatePeeWindowCandles();
               
               const peeBounds = getPeeWindowBounds(
                   closeTimeMs,

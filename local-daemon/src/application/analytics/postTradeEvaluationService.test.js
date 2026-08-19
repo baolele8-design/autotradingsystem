@@ -57,7 +57,7 @@ test('queues legacy fixed-window PEE rows for policy-version rebuild', async () 
   assert.equal(supabase.filters.length, 1);
   assert.match(
     supabase.filters[0],
-    /pee_policy_version\.neq\.pee-planned-hold-v1/
+    /pee_policy_version\.neq\.pee-window-3c-v2/
   );
   assert.match(supabase.filters[0], /pee_policy_version\.is\.null/);
 });
@@ -81,7 +81,7 @@ test('evaluates a resolved symbol independently of the current scanner pool', as
     safeFetch: async url => {
       requestedUrls.push(url);
       const startTime = Number(new URL(url).searchParams.get('startTime'));
-      return Array.from({ length: 6 }, (_, index) => [
+      return Array.from({ length: 3 }, (_, index) => [
         startTime + index * 60 * 60 * 1000,
         '105',
         String(110 + index / 10),
@@ -99,20 +99,61 @@ test('evaluates a resolved symbol independently of the current scanner pool', as
   assert.equal(supabase.updates.length, 1);
   assert.equal(supabase.updates[0].id, trade.id);
   assert.equal(supabase.updates[0].values.pee_analyzed, true);
-  assert.equal(supabase.updates[0].values.pee_window_candles, 6);
+  assert.equal(supabase.updates[0].values.pee_window_candles, 3);
   assert.equal(
     supabase.updates[0].values.pee_policy_version,
-    'pee-planned-hold-v1'
+    'pee-window-3c-v2'
   );
   assert.ok(supabase.updates[0].values.pee_analyzed_at);
 });
 
-test('calculates a bounded PEE horizon from immutable planned tHold', () => {
-  assert.equal(calculatePeeWindowCandles(2), 6);
-  assert.equal(calculatePeeWindowCandles(8), 12);
-  assert.equal(calculatePeeWindowCandles(16), 24);
-  assert.equal(calculatePeeWindowCandles(30), 24);
-  assert.equal(calculatePeeWindowCandles(null), null);
+test('backfills PEE for legacy trades missing planned_holding_cycles', async () => {
+  const closeTime = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+  const trade = {
+    id: 'legacy-no-planned-cycles',
+    symbol: 'OLDUSDT',
+    interval: '1h',
+    direction: 'LONG',
+    entry: 100,
+    close_price: 105,
+    position_size_usd: 100,
+    close_time: closeTime,
+    planned_holding_cycles: null
+  };
+  const supabase = createSupabase([trade]);
+  const requestedUrls = [];
+  const service = createPostTradeEvaluationService({
+    safeFetch: async url => {
+      requestedUrls.push(url);
+      const startTime = Number(new URL(url).searchParams.get('startTime'));
+      return Array.from({ length: 3 }, (_, index) => [
+        startTime + index * 60 * 60 * 1000,
+        '105',
+        '110',
+        '100',
+        '108'
+      ]);
+    },
+    supabase
+  });
+
+  await service.runPostTradeEvaluation();
+
+  assert.equal(requestedUrls.length, 1);
+  assert.equal(supabase.updates.length, 1);
+  assert.equal(supabase.updates[0].id, trade.id);
+  assert.equal(supabase.updates[0].values.pee_window_candles, 3);
+  assert.equal(supabase.updates[0].values.pee_policy_version, 'pee-window-3c-v2');
+});
+
+test('uses a fixed 3-candle window per trade frame for PEE', () => {
+  // Owner directive 2026-08-19: PEE window = 2-3 nến theo khung lệnh,
+  // không phụ thuộc holding cycles — kết quả nhanh, backfill được mọi lệnh.
+  assert.equal(calculatePeeWindowCandles(), 3);
+  assert.equal(calculatePeeWindowCandles(2), 3);
+  assert.equal(calculatePeeWindowCandles(8), 3);
+  assert.equal(calculatePeeWindowCandles(16), 3);
+  assert.equal(calculatePeeWindowCandles(null), 3);
 });
 
 test('starts PEE at the first full candle after an intra-candle close', () => {
@@ -207,7 +248,7 @@ test('concurrent callers await the same PEE evaluation run', async () => {
       fetchCount += 1;
       await gate;
       const startTime = Number(new URL(url).searchParams.get('startTime'));
-      return Array.from({ length: 6 }, (_, index) => [
+      return Array.from({ length: 3 }, (_, index) => [
         startTime + index * hour,
         '100',
         '101',
