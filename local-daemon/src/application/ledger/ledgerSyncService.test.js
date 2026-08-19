@@ -10,7 +10,7 @@ import {
   makeInitialClientAlgoId
 } from '../../domain/orders/trailingOrders.js';
 
-function createMockSupabase(initialLogs = []) {
+function createMockSupabase(initialLogs = [], options = {}) {
   let logs = [...initialLogs];
   const updateCalls = [];
 
@@ -44,7 +44,13 @@ function createMockSupabase(initialLogs = []) {
               if (item) {
                 Object.assign(item, payload);
               }
-              return Promise.resolve({ error: null });
+              if (options.updateRejectsWith) {
+                return Promise.reject(options.updateRejectsWith);
+              }
+              if (options.updateResolvesWithError) {
+                return Promise.resolve({ data: null, error: options.updateResolvesWithError });
+              }
+              return Promise.resolve({ data: null, error: null });
             }
           };
         }
@@ -394,6 +400,94 @@ test('ledgerSyncService - PENDING order expires to CANCELLED_EXPIRED after 3 can
   assert.equal(supabase.updateCalls[0].payload.status, 'CANCELLED_EXPIRED');
   assert.equal(supabase.updateCalls[0].payload.exit_reason, 'EXPIRED_3_CANDLES');
   assert.ok(supabase.updateCalls[0].payload.close_time);
+});
+
+test('ledgerSyncService - PENDING expire update REJECTION is logged, not silently swallowed', async () => {
+  const expiredTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const initialLogs = [
+    {
+      id: 'trade-expire-reject-1',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+      status: 'PENDING',
+      type: 'FUTURES',
+      entry: 50000,
+      sl: 49000,
+      interval: '15m',
+      strategy_name: 'VOL_COMPRESSION_IGNITION',
+      soft_score: 80,
+      atr_at_entry: 500,
+      created_at: expiredTimestamp
+    }
+  ];
+
+  const supabase = createMockSupabase(initialLogs, {
+    updateRejectsWith: new Error('supabase network timeout')
+  });
+  const errorMock = test.mock.method(console, 'error', () => {});
+
+  try {
+    const service = createLedgerSyncService({
+      markPriceCache: new Map(),
+      readBinanceReq: async () => [{ symbol: 'BTCUSDT', positionAmt: '0' }],
+      sendBinanceReq: async () => ({ data: { code: 200, msg: 'Success' } }),
+      supabase
+    });
+    await service.runLedgerStateSync();
+  } finally {
+    errorMock.mock.restore();
+  }
+
+  assert.ok(
+    errorMock.mock.calls.length >= 1,
+    'expected console.error to be called when the expire update rejects'
+  );
+  const logged = errorMock.mock.calls.map(call => call.arguments.join(' ')).join('\n');
+  assert.match(logged, /trade-expire-reject-1/);
+});
+
+test('ledgerSyncService - PENDING expire update error field is logged, not silently swallowed', async () => {
+  const expiredTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const initialLogs = [
+    {
+      id: 'trade-expire-error-1',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+      status: 'PENDING',
+      type: 'FUTURES',
+      entry: 50000,
+      sl: 49000,
+      interval: '15m',
+      strategy_name: 'VOL_COMPRESSION_IGNITION',
+      soft_score: 80,
+      atr_at_entry: 500,
+      created_at: expiredTimestamp
+    }
+  ];
+
+  const supabase = createMockSupabase(initialLogs, {
+    updateResolvesWithError: { code: '42P01', message: 'relation does not exist' }
+  });
+  const errorMock = test.mock.method(console, 'error', () => {});
+
+  try {
+    const service = createLedgerSyncService({
+      markPriceCache: new Map(),
+      readBinanceReq: async () => [{ symbol: 'BTCUSDT', positionAmt: '0' }],
+      sendBinanceReq: async () => ({ data: { code: 200, msg: 'Success' } }),
+      supabase
+    });
+    await service.runLedgerStateSync();
+  } finally {
+    errorMock.mock.restore();
+  }
+
+  assert.ok(
+    errorMock.mock.calls.length >= 1,
+    'expected console.error to be called when the expire update resolves with an error field'
+  );
+  const logged = errorMock.mock.calls.map(call => call.arguments.join(' ')).join('\n');
+  assert.match(logged, /trade-expire-error-1/);
 });
 
 test('ledgerSyncService - PENDING order invalidates to CANCELLED_INVALIDATED on gate failure', async () => {

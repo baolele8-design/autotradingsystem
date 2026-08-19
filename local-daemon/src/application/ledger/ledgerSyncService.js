@@ -450,15 +450,21 @@ export function createLedgerSyncService(context = {}) {
               console.log(`[\u23f0 PENDING EXPIRED] Lệnh PENDING ${log.symbol} (${log.interval}) đã hết hạn 3 nến. Hủy lệnh...`);
               await cancelTradeAlgoOrders(log);
               await safeCancelLimitOrders(log.symbol);
-              await supabase
-                .from('trade_logs')
-                .update({
-                  status: 'CANCELLED_EXPIRED',
-                  exit_reason: 'EXPIRED_3_CANDLES',
-                  close_time: new Date().toISOString()
-                })
-                .eq('id', log.id)
-                .catch(() => {});
+              try {
+                const updateRes = await supabase
+                  .from('trade_logs')
+                  .update({
+                    status: 'CANCELLED_EXPIRED',
+                    exit_reason: 'EXPIRED_3_CANDLES',
+                    close_time: new Date().toISOString()
+                  })
+                  .eq('id', log.id);
+                if (updateRes?.error) {
+                  console.error(`[❌ LEDGER EXPIRE UPDATE FAILED] id=${log.id} symbol=${log.symbol}: ${JSON.stringify(updateRes.error)}`);
+                }
+              } catch (updateErr) {
+                console.error(`[❌ LEDGER EXPIRE UPDATE FAILED] id=${log.id} symbol=${log.symbol}: ${updateErr?.message || updateErr}`);
+              }
             } else {
               // b. Check gate invalidation
               let snapshot = null;
@@ -534,15 +540,21 @@ export function createLedgerSyncService(context = {}) {
                   console.log(`[🚫 PENDING INVALIDATED] Lệnh PENDING ${log.symbol} bị vi phạm gate: ${reason}. Hủy lệnh...`);
                   await cancelTradeAlgoOrders(log);
                   await safeCancelLimitOrders(log.symbol);
-                  await supabase
-                    .from('trade_logs')
-                    .update({
-                      status: 'CANCELLED_INVALIDATED',
-                      exit_reason: reason,
-                      close_time: new Date().toISOString()
-                    })
-                    .eq('id', log.id)
-                    .catch(() => {});
+                  try {
+                    const updateRes = await supabase
+                      .from('trade_logs')
+                      .update({
+                        status: 'CANCELLED_INVALIDATED',
+                        exit_reason: reason,
+                        close_time: new Date().toISOString()
+                      })
+                      .eq('id', log.id);
+                    if (updateRes?.error) {
+                      console.error(`[❌ LEDGER INVALIDATE UPDATE FAILED] id=${log.id} symbol=${log.symbol}: ${JSON.stringify(updateRes.error)}`);
+                    }
+                  } catch (updateErr) {
+                    console.error(`[❌ LEDGER INVALIDATE UPDATE FAILED] id=${log.id} symbol=${log.symbol}: ${updateErr?.message || updateErr}`);
+                  }
                 }
               } else {
                 console.log(`[⏳ PENDING SYNC] Bỏ qua kiểm tra gate cho ${log.symbol} do market snapshot chưa sẵn sàng.`);
